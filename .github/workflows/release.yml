@@ -1,6 +1,6 @@
 name: Release
 
-# 打 tag（v*）即自动构建 APK 并发布到 Releases；也可在 Actions 页手动触发。
+# 打 tag（v*）即自动构建 APK 并发布到 Releases；也可在 Actions 页手动触发（产物为草稿，不覆盖正式版本）。
 # 本地执行 ./scripts/release.sh 1.6.1 "说明" 会顺带 push tag，触发这里。
 
 on:
@@ -8,13 +8,13 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
-    inputs:
-      version:
-        description: "版本号（仅手动触发时用，如 1.6.1）"
-        required: false
 
 permissions:
   contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -28,6 +28,12 @@ jobs:
           java-version: "17"
 
       - uses: gradle/actions/setup-gradle@v4
+
+      - name: 读取版本号
+        run: |
+          VERSION=$(grep -m1 'versionName' app/build.gradle.kts | sed 's/.*"\(.*\)".*/\1/')
+          echo "本次版本：$VERSION"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
       - name: 准备 local.properties 与签名
         env:
@@ -49,7 +55,7 @@ jobs:
             echo "✅ 使用仓库 Secrets 中的正式签名"
             echo "SIGNED=yes" >> "$GITHUB_ENV"
           else
-            echo "::warning::未配置 ANDROID_KEYSTORE_BASE64，本次将使用 debug 签名，产物不能覆盖安装正式包"
+            echo "::warning::未配置 ANDROID_KEYSTORE_BASE64，本次使用 debug 签名，产物不能覆盖安装正式包"
             echo "SIGNED=no" >> "$GITHUB_ENV"
           fi
 
@@ -61,10 +67,8 @@ jobs:
       - name: 构建 Release APK
         run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
 
-      - name: 整理产物（文件名保持纯 ASCII，避免 Release 附件名被清洗）
+      - name: 整理产物（附件名保持纯 ASCII，避免被清洗）
         run: |
-          VERSION="${GITHUB_REF_NAME:-manual-${GITHUB_RUN_NUMBER}}"
-          VERSION="${VERSION#v}"
           if [ "$SIGNED" = "yes" ]; then
             OUT="AI-Text-Editor-v${VERSION}.apk"
           else
@@ -73,8 +77,12 @@ jobs:
           cp app/build/outputs/apk/release/app-release.apk "$OUT"
           echo "APK_NAME=$OUT" >> "$GITHUB_ENV"
           ls -lh "$OUT"
-          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
-          "$BT/zipalign" -c -P 16 4 "$OUT" && echo "✅ 16KB 对齐校验通过"
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* 2>/dev/null | sort -V | tail -1)
+          if [ -n "$BT" ]; then
+            "$BT/zipalign" -c -P 16 4 "$OUT" \
+              && echo "✅ 16KB 对齐校验通过" \
+              || echo "::warning::zipalign 16KB 校验未通过，请检查 AGP 配置"
+          fi
 
       - name: 计算校验值
         run: sha256sum "$APK_NAME" | tee SHA256SUMS.txt
@@ -82,6 +90,9 @@ jobs:
       - name: 发布到 GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ env.VERSION }}
+          name: v${{ env.VERSION }}
+          draft: ${{ github.event_name == 'workflow_dispatch' }}
           files: |
             ${{ env.APK_NAME }}
             SHA256SUMS.txt
@@ -91,5 +102,5 @@ jobs:
       - name: 保留构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: apk-${{ github.ref_name }}
+          name: apk-v${{ env.VERSION }}
           path: ${{ env.APK_NAME }}
