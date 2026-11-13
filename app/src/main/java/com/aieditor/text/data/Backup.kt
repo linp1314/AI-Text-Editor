@@ -2,17 +2,20 @@ package com.aieditor.text.data
 
 import org.json.JSONObject
 
-/** 一次备份的内容：软件配置 + 各服务商密钥 + 当前文档。 */
+/** 一次备份的内容：软件配置 + 各服务商密钥 + 所有打开的文档。 */
 data class BackupPayload(
     val createdAt: Long,
     val versionName: String,
     val device: String,
     val config: ApiConfig,
+    /** 当前文档正文；新备份同时写进 [documents]，保留它只为兼容旧版恢复。 */
     val draft: String,
     val chunked: Boolean,
     val chunkLimit: Int,
     /** 各接口地址已保存的 Key（槽位 → Key），换机后不用逐个重填。 */
     val apiKeys: Map<String, String> = emptyMap(),
+    /** 所有打开的文档（含标题与来源路径），老备份里没有这一项。 */
+    val documents: List<Doc> = emptyList(),
 ) {
     fun toJson(): String = JSONObject().apply {
         put("app", "AI文本编辑")
@@ -35,10 +38,13 @@ data class BackupPayload(
         if (apiKeys.isNotEmpty()) {
             put("apiKeys", JSONObject().apply { apiKeys.forEach { (k, v) -> put(k, v) } })
         }
+        if (documents.isNotEmpty()) {
+            put("documents", DocCodec.encodeArray(documents))
+        }
     }.toString(2)
 
     companion object {
-        const val SCHEMA = 2
+        const val SCHEMA = 3
 
         fun fromJson(text: String): BackupPayload {
             val root = JSONObject(text)
@@ -62,6 +68,9 @@ data class BackupPayload(
                     if (value.isNotBlank()) keys[name] = value
                 }
             }
+            val docs = root.optJSONArray("documents")
+                ?.let { DocCodec.decodeArray(it) }
+                .orEmpty()
             return BackupPayload(
                 createdAt = root.optLong("createdAt", 0L),
                 versionName = root.optString("versionName", ""),
@@ -72,6 +81,7 @@ data class BackupPayload(
                 chunkLimit = root.optInt("chunkLimit", TextChunker.DEFAULT_LIMIT)
                     .coerceIn(300, 20000),
                 apiKeys = keys,
+                documents = docs,
             )
         }
     }
@@ -95,6 +105,10 @@ data class MergeResult(
     val notes: List<String>,
     /** 备份里各服务商的 Key，恢复时一并写回。 */
     val apiKeys: Map<String, String> = emptyMap(),
+    /** 备份里的文档列表；老备份为空，只有 [draft] 这一篇。 */
+    val documents: List<Doc> = emptyList(),
+    /** true 表示文档列表整体替换备份内容（覆盖恢复）。 */
+    val overwriteDocs: Boolean = false,
 )
 
 object BackupMerge {
@@ -107,6 +121,8 @@ object BackupMerge {
         chunkLimit = backup.chunkLimit,
         notes = listOf("配置与文档已用备份覆盖"),
         apiKeys = backup.apiKeys,
+        documents = backup.documents,
+        overwriteDocs = true,
     )
 
     /**
@@ -114,7 +130,12 @@ object BackupMerge {
      * 地址、模型、密钥必须成组补全——只换地址不换密钥会让请求带着上一个服务商的 Key 去访问新地址。
      * 是否「空缺」以本地有没有密钥为准：没有密钥就视为尚未配置，整组采用备份。
      */
-    fun merge(local: ApiConfig, localDraft: String, backup: BackupPayload): MergeResult {
+    fun merge(
+        local: ApiConfig,
+        localDraft: String,
+        backup: BackupPayload,
+        localDocs: List<Doc> = emptyList(),
+    ): MergeResult {
         val notes = mutableListOf<String>()
         val b = backup.config
 
@@ -137,20 +158,58 @@ object BackupMerge {
             local
         }
 
-        val draft = if (localDraft.isBlank()) backup.draft else localDraft
-        if (localDraft.isNotBlank() && backup.draft.isNotBlank()) {
-            notes.add("本地文档非空，已保留本地文档")
-        } else if (localDraft.isBlank() && backup.draft.isNotBlank()) {
-            notes.add("文档")
-        }
+        val docs = mergeDocs(localDocs, localDraft, backup)
+        val draft = docs.localDraft.ifBlank { backup.draft }
 
         return MergeResult(
             config = config,
             draft = draft,
             chunked = backup.chunked,
             chunkLimit = backup.chunkLimit,
-            notes = notes,
+            notes = notes + docs.note,
             apiKeys = backup.apiKeys,
+            documents = docs.added,
+            overwriteDocs = docs.replace,
         )
+    }
+
+    private data class DocMerge(
+        val added: List<Doc>,
+        val replace: Boolean,
+        val note: String,
+        val localDraft: String,
+    )
+
+    /**
+     * 文档合并规则：
+     * - 本地只有一篇空白文档 → 直接用备份的文档替换；
+     * - 本地有内容 → 只追加备份里本地没有的（按正文比对），不覆盖本地。
+     */
+    private fun mergeDocs(local: List<Doc>, localDraft: String, backup: BackupPayload): DocMerge {
+        val incoming = backup.documents
+        if (incoming.isEmpty()) {
+            return if (localDraft.isBlank() && backup.draft.isNotBlank()) {
+                DocMerge(emptyList(), false, "文档", backup.draft)
+            } else {
+                if (localDraft.isNotBlank() && backup.draft.isNotBlank()) {
+                    DocMerge(emptyList(), false, "本地文档非空，已保留本地文档", localDraft)
+                } else {
+                    DocMerge(emptyList(), false, "", localDraft)
+                }
+            }
+        }
+
+        val blankLocal = local.isEmpty() || local.all { it.text.isBlank() }
+        if (blankLocal) {
+            return DocMerge(incoming, true, "文档（${incoming.size} 篇）", localDraft)
+        }
+
+        val existing = local.map { it.text.trim() }.toHashSet()
+        val added = incoming.filter { it.text.isNotBlank() && it.text.trim() !in existing }
+        return if (added.isEmpty()) {
+            DocMerge(emptyList(), false, "本地文档非空，已保留本地文档", localDraft)
+        } else {
+            DocMerge(added, false, "文档（新增 ${added.size} 篇）", localDraft)
+        }
     }
 }

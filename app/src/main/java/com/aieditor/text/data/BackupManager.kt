@@ -9,7 +9,7 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * 备份调度：负责把「配置 + 当前文档」打包上传到 WebDAV，以及下载并合并回来。
+ * 备份调度：负责把「配置 + 所有打开的文档」打包上传到 WebDAV，以及下载并合并回来。
  * 网络操作都在 IO 线程执行，异常统一抛 [WebDavException] 或 [IllegalStateException]。
  */
 class BackupManager(
@@ -34,8 +34,8 @@ class BackupManager(
         return now - s.lastBackupAt >= interval
     }
 
-    /** 立即备份，返回云端文件名。 */
-    suspend fun backupNow(): String = withContext(Dispatchers.IO) {
+    /** 立即备份（含所有打开的文档），返回云端文件名。 */
+    suspend fun backupNow(docs: List<Doc> = emptyList()): String = withContext(Dispatchers.IO) {
         val s = settings()
         if (!s.configured) throw IllegalStateException("请先填写 WebDAV 地址")
 
@@ -49,6 +49,7 @@ class BackupManager(
             chunked = prefs.chunked,
             chunkLimit = prefs.chunkLimit,
             apiKeys = prefs.allApiKeys(),
+            documents = docs,
         )
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date(payload.createdAt))
         val name = "aieditor-$stamp.json"
@@ -82,16 +83,19 @@ class BackupManager(
     }
 
     /** 下载指定备份并按 [mode] 合并。 */
-    suspend fun restore(file: RemoteFile, mode: RestoreMode): MergeResult =
-        withContext(Dispatchers.IO) {
-            val s = settings()
-            val bytes = clientFactory(s).get(file.href)
-            val payload = BackupPayload.fromJson(bytes.toString(Charsets.UTF_8))
-            when (mode) {
-                RestoreMode.OVERWRITE -> BackupMerge.overwrite(payload)
-                RestoreMode.MERGE -> BackupMerge.merge(prefs.loadConfig(), prefs.draft, payload)
-            }
+    suspend fun restore(
+        file: RemoteFile,
+        mode: RestoreMode,
+        localDocs: List<Doc> = emptyList(),
+    ): MergeResult = withContext(Dispatchers.IO) {
+        val s = settings()
+        val bytes = clientFactory(s).get(file.href)
+        val payload = BackupPayload.fromJson(bytes.toString(Charsets.UTF_8))
+        when (mode) {
+            RestoreMode.OVERWRITE -> BackupMerge.overwrite(payload)
+            RestoreMode.MERGE -> BackupMerge.merge(prefs.loadConfig(), prefs.draft, payload, localDocs)
         }
+    }
 
     private fun normalizeDir(raw: String): String {
         var dir = raw.trim().ifBlank { BackupSettings.DEFAULT_DIR }

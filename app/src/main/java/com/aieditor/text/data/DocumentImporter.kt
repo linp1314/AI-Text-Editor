@@ -2,6 +2,7 @@ package com.aieditor.text.data
 
 import android.content.Context
 import android.net.Uri
+import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.text.Html
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
@@ -137,8 +138,28 @@ object DocumentImporter {
         return if (decoded.isNotEmpty() && control * 100 / decoded.length > 2) null else decoded
     }
 
-    private fun queryDisplayName(context: Context, uri: Uri): String {
-        runCatching {
+    /**
+     * 给文档列表用的来源路径。
+     * SAF 的 content:// 地址本身看不出位置，这里把常见的 primary: 文档 id 还原成真实路径；
+     * 还原不出来时退回文件名，不显示一串无意义的 URI。
+     */
+    fun displayPath(context: Context, uri: Uri): String {
+        if (uri.scheme == "file") return uri.path.orEmpty()
+        val documentId = runCatching { DocumentsContract.getDocumentId(uri) }.getOrNull()
+        if (!documentId.isNullOrBlank()) {
+            val path = when {
+                documentId.startsWith("primary:") ->
+                    "/storage/emulated/0/" + documentId.removePrefix("primary:")
+                documentId.startsWith("raw:") -> documentId.removePrefix("raw:")
+                else -> null
+            }
+            if (path != null) return path
+        }
+        // 下载目录等由系统托管的位置，路径里只有一串数字 id，直接用文件名更清楚
+        return queryDisplayName(context, uri)
+    }
+
+    private fun queryDisplayName(context: Context, uri: Uri): String {        runCatching {
             context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
                 if (cursor.moveToFirst()) {
                     val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)

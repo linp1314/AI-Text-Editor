@@ -132,7 +132,7 @@ fun BackupDialog(
                         .padding(horizontal = 18.dp),
                 ) {
                     Text(
-                        "把软件配置和当前文档备份到自己的 WebDAV（群晖、坚果云、Nextcloud、Alist 等均可），" +
+                        "把软件配置和所有打开的文档备份到自己的 WebDAV（群晖、坚果云、Nextcloud、Alist 等均可），" +
                             "换机或重装后可以直接恢复。",
                         fontSize = 12.sp,
                         lineHeight = 18.sp,
@@ -244,7 +244,7 @@ fun BackupDialog(
 
                     Spacer(Modifier.height(10.dp))
                     Text(
-                        "备份文件是明文 JSON，含接口地址、API Key 与当前文档。请只放到自己可信的 WebDAV 目录，不要上传到公开网盘。",
+                        "备份文件是明文 JSON，含接口地址、API Key 与所有打开的文档。请只放到自己可信的 WebDAV 目录，不要上传到公开网盘。",
                         fontSize = 11.sp,
                         lineHeight = 16.sp,
                         color = MaterialTheme.colorScheme.outline,

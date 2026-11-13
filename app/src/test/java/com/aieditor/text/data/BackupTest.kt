@@ -2,6 +2,7 @@ package com.aieditor.text.data
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -178,5 +179,86 @@ class BackupTest {
         assertEquals("sk-b", result.config.apiKey)
         assertEquals("备份文档", result.draft)
         assertEquals(4000, result.chunkLimit)
+    }
+
+    private fun doc(title: String, text: String, uri: String? = null) =
+        Doc(id = text.hashCode().toLong(), title = title, subtitle = uri ?: "未命名文档", uri = uri, text = text)
+
+    @Test
+    fun `documents survive json round trip`() {
+        val backup = BackupPayload(
+            createdAt = 0,
+            versionName = "1.10.0",
+            device = "d",
+            config = ApiConfig(),
+            draft = "第一篇",
+            chunked = true,
+            chunkLimit = 1000,
+            documents = listOf(
+                doc("A.txt", "第一篇", "content://a"),
+                doc("未命名", "第二篇"),
+            ),
+        )
+
+        val restored = BackupPayload.fromJson(backup.toJson())
+
+        assertEquals(2, restored.documents.size)
+        assertEquals("A.txt", restored.documents[0].title)
+        assertEquals("content://a", restored.documents[0].uri)
+        assertEquals("第二篇", restored.documents[1].text)
+        assertNull(restored.documents[1].uri)
+    }
+
+    @Test
+    fun `old backup without documents still restores draft`() {
+        val old = """{"draft":"旧版正文","createdAt":1,"schema":2}"""
+
+        val restored = BackupPayload.fromJson(old)
+
+        assertTrue(restored.documents.isEmpty())
+        assertEquals("旧版正文", restored.draft)
+    }
+
+    @Test
+    fun `merge replaces blank local document with backup documents`() {
+        val backup = BackupPayload(
+            createdAt = 0,
+            versionName = "1.10.0",
+            device = "other",
+            config = ApiConfig(apiKey = "sk-backup"),
+            draft = "备份第一篇",
+            chunked = true,
+            chunkLimit = 1000,
+            documents = listOf(doc("一篇", "备份第一篇"), doc("二篇", "备份第二篇")),
+        )
+        val localBlank = listOf(doc("未命名", ""))
+
+        val result = BackupMerge.merge(ApiConfig(apiKey = "sk-local"), "", backup, localBlank)
+
+        assertTrue(result.overwriteDocs)
+        assertEquals(2, result.documents.size)
+        assertEquals("备份第二篇", result.documents[1].text)
+    }
+
+    @Test
+    fun `merge only adds documents missing locally`() {
+        val backup = BackupPayload(
+            createdAt = 0,
+            versionName = "1.10.0",
+            device = "other",
+            config = ApiConfig(apiKey = "sk-backup"),
+            draft = "本机已有",
+            chunked = true,
+            chunkLimit = 1000,
+            documents = listOf(doc("一篇", "本机已有"), doc("二篇", "只存在备份里")),
+        )
+        val local = listOf(doc("本地", "本机已有"))
+
+        val result = BackupMerge.merge(ApiConfig(apiKey = "sk-local"), "本机已有", backup, local)
+
+        assertFalse(result.overwriteDocs)
+        assertEquals(1, result.documents.size)
+        assertEquals("只存在备份里", result.documents.first().text)
+        assertEquals("本机已有", result.draft)
     }
 }

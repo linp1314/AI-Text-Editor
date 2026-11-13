@@ -13,8 +13,12 @@ import com.aieditor.text.data.AppPrefs
 import com.aieditor.text.data.BackupManager
 import com.aieditor.text.data.BackupSettings
 import com.aieditor.text.data.ChatMessage
+import com.aieditor.text.data.Doc
+import com.aieditor.text.data.DocCodec
 import com.aieditor.text.data.DocumentImporter
+import com.aieditor.text.data.DocumentStore
 import com.aieditor.text.data.HistoryEntry
+import com.aieditor.text.data.MergeResult
 import com.aieditor.text.data.PromptBuilder
 import com.aieditor.text.data.RemoteFile
 import com.aieditor.text.data.RestoreMode
@@ -23,6 +27,7 @@ import com.aieditor.text.data.TextChunker
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -31,6 +36,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -43,10 +49,17 @@ enum class Scope(val label: String) {
     PARAGRAPH("当前段落"),
 }
 
-data class ImportOutcome(val success: Boolean, val message: String)
+data class ImportOutcome(
+    val success: Boolean,
+    val message: String,
+    /** 导入成功后的新文档，可用于撤回这次导入。 */
+    val docId: Long? = null,
+)
 
 data class AiState(
     val running: Boolean = false,
+    /** 本次会话属于哪篇文档；切换文档后不会把结果写进另一篇。 */
+    val docId: Long? = null,
     val scope: Scope = Scope.WHOLE,
     /** 首轮的指令。 */
     val instruction: String = "",
@@ -86,8 +99,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _config = MutableStateFlow(prefs.loadConfig())
     val config: StateFlow<ApiConfig> = _config.asStateFlow()
 
-    private val _editor = MutableStateFlow(TextFieldValue(prefs.draft, TextRange(prefs.draft.length)))
+    private val _editor = MutableStateFlow(TextFieldValue(""))
     val editor: StateFlow<TextFieldValue> = _editor.asStateFlow()
+
+    // 多文档：打开的文档列表 + 当前文档；每篇各自保留撤销栈与光标
+    private val docStore = DocumentStore(app.filesDir)
+
+    private val _docs = MutableStateFlow<List<Doc>>(emptyList())
+    val docs: StateFlow<List<Doc>> = _docs.asStateFlow()
+
+    private val _activeDocId = MutableStateFlow(0L)
+    val activeDocId: StateFlow<Long> = _activeDocId.asStateFlow()
 
     private val _ai = MutableStateFlow(AiState(chunked = prefs.chunked, chunkLimit = prefs.chunkLimit))
     val ai: StateFlow<AiState> = _ai.asStateFlow()
@@ -113,12 +135,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private var job: Job? = null
     private var pendingRange: IntRange? = null
+    private var saveJob: Job? = null
 
-    // 编辑区撤销 / 恢复：存整份快照，连续输入合并成一步
-    private val undoStack = ArrayDeque<TextFieldValue>()
-    private val redoStack = ArrayDeque<TextFieldValue>()
-    private var lastEditAt = 0L
-    private var burstActive = false
+    // 编辑区撤销 / 恢复：存整份快照，连续输入合并成一步。撤销栈按文档分开存，
+    // 切换文档后各篇的撤销历史互不影响。
+    private class DocHistory {
+        val undo = ArrayDeque<TextFieldValue>()
+        val redo = ArrayDeque<TextFieldValue>()
+        var lastEditAt = 0L
+        var burstActive = false
+        /** 上次离开这篇文档时的光标位置，-1 表示还没记录过。 */
+        var cursor = -1
+    }
+
+    private val histories = HashMap<Long, DocHistory>()
 
     private val _canUndo = MutableStateFlow(false)
     val canUndo: StateFlow<Boolean> = _canUndo.asStateFlow()
@@ -126,30 +156,184 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _canRedo = MutableStateFlow(false)
     val canRedo: StateFlow<Boolean> = _canRedo.asStateFlow()
 
+    init {
+        // 首次启动或老版本升级：把原来的单篇草稿当作第一篇文档
+        val loaded = docStore.load()
+        val docs = loaded.ifEmpty {
+            listOf(Doc(id = newId(), title = "未命名", subtitle = "未命名文档", text = prefs.draft))
+        }
+        _docs.value = docs
+        _activeDocId.value = docs.first().id
+        openDoc(docs.first().id)
+    }
+
+    // ------------------------------------------------------------ 文档列表
+
+    private fun newId(): Long = System.nanoTime()
+
+    private fun history(): DocHistory = histories.getOrPut(_activeDocId.value) { DocHistory() }
+
+    /** 未命名文档按顺序编号：未命名、未命名 2、未命名 3… */
+    private fun untitledTitle(): String {
+        val existing = _docs.value.map { it.title }.toSet()
+        if ("未命名" !in existing) return "未命名"
+        var index = 2
+        while ("未命名 $index" in existing) index++
+        return "未命名 $index"
+    }
+
+    /** 把当前编辑区内容写回所属文档；[schedule] 为 false 时由调用方自己落盘。 */
+    private fun updateActiveText(text: String, schedule: Boolean = true) {
+        val id = _activeDocId.value
+        _docs.update { list -> list.map { if (it.id == id) it.copy(text = text) else it } }
+        if (schedule) scheduleSave()
+    }
+
+    /** 切换、新建、关闭后统一走这里：把内容、光标、存档一起换过来。 */
+    private fun openDoc(id: Long) {
+        val doc = _docs.value.firstOrNull { it.id == id } ?: return
+        val saved = histories.getOrPut(id) { DocHistory() }
+        val cursor = if (saved.cursor < 0) doc.text.length else saved.cursor.coerceIn(0, doc.text.length)
+        _editor.value = TextFieldValue(doc.text, TextRange(cursor))
+        prefs.draft = doc.text
+        pendingRange = null
+        refreshHistoryFlags()
+        ensureSessionForActiveDoc()
+    }
+
+    fun switchDoc(id: Long) {
+        if (id == _activeDocId.value) return
+        if (_docs.value.none { it.id == id }) return
+        // 离开前记住光标，回来时还能接着写
+        history().apply {
+            cursor = _editor.value.selection.start
+            burstActive = false
+        }
+        _activeDocId.value = id
+        openDoc(id)
+    }
+
+    /** 新建空白文档，排在列表最前面并立即切换过去。 */
+    fun newDoc(title: String = untitledTitle(), text: String = "") {
+        val doc = Doc(id = newId(), title = title, subtitle = "未命名文档", text = text)
+        _docs.update { listOf(doc) + it }
+        _activeDocId.value = doc.id
+        openDoc(doc.id)
+        scheduleSave()
+    }
+
+    /** 关闭一篇文档；返回被关闭的内容，供「撤销」时重新打开。 */
+    fun closeDoc(id: Long): Doc? {
+        val list = _docs.value
+        val index = list.indexOfFirst { it.id == id }
+        if (index < 0) return null
+        val removed = list[index]
+        val rest = list.filterNot { it.id == id }
+        histories.remove(id)
+
+        if (rest.isEmpty()) {
+            // 最后一篇不真的关掉，换成空白文档，避免界面上没有可编辑内容
+            val blank = Doc(id = newId(), title = untitledTitle(), subtitle = "未命名文档")
+            _docs.value = listOf(blank)
+            _activeDocId.value = blank.id
+            openDoc(blank.id)
+        } else {
+            _docs.value = rest
+            if (_activeDocId.value == id) {
+                val next = rest[minOf(index, rest.lastIndex)]
+                _activeDocId.value = next.id
+                openDoc(next.id)
+            }
+        }
+        if (_ai.value.docId == id) newSession()
+        scheduleSave()
+        return removed
+    }
+
+    /** 重新打开刚关闭的文档（撤销关闭）。 */
+    fun restoreDoc(doc: Doc) {
+        if (_docs.value.any { it.id == doc.id }) return
+        val list = _docs.value
+        // 关掉最后一篇时会留下一个空白占位，撤销时直接用它换回来，免得越撤越多
+        val placeholder = list.size == 1 && list.first().text.isBlank() && list.first().uri == null
+        _docs.value = if (placeholder) listOf(doc) else listOf(doc) + list
+        _activeDocId.value = doc.id
+        openDoc(doc.id)
+        scheduleSave()
+    }
+
+    /** 重命名：只改标题，正文与来源路径不动。 */
+    fun renameDoc(id: Long, title: String) {
+        val name = title.trim()
+        if (name.isEmpty()) return
+        _docs.update { list -> list.map { if (it.id == id) it.copy(title = name) else it } }
+        scheduleSave()
+    }
+
+    /** 文档内容自动保存到应用目录，连续输入时延迟合并成一次写盘。 */
+    private fun scheduleSave() {
+        saveJob?.cancel()
+        saveJob = viewModelScope.launch {
+            delay(400)
+            val snapshot = _docs.value
+            withContext(Dispatchers.IO) { docStore.save(snapshot) }
+        }
+    }
+
+    private fun saveNow() {
+        saveJob?.cancel()
+        val snapshot = _docs.value
+        viewModelScope.launch(Dispatchers.IO) { docStore.save(snapshot) }
+    }
+
+    override fun onCleared() {
+        saveJob?.cancel()
+        docStore.save(_docs.value)
+        super.onCleared()
+    }
+
     // ------------------------------------------------------------ 编辑区
 
     fun onEditorChange(value: TextFieldValue) {
         val previous = _editor.value
-        if (value.text != previous.text) recordUndo(previous)
+        if (value.text != previous.text) {
+            recordUndo(previous)
+            updateActiveText(value.text)
+        }
         _editor.value = value
         prefs.draft = value.text
     }
 
+    /** 整篇替换当前文档（应用结果、恢复备份时使用）。 */
     fun setEditorText(text: String) {
         _editor.value = TextFieldValue(text, TextRange(text.length))
         prefs.draft = text
+        updateActiveText(text)
     }
 
-    /** 从系统文件选择器导入文档，成功后替换编辑区内容（可撤销）。 */
+    /**
+     * 从系统文件选择器导入文档：作为新的一篇打开，不覆盖当前正在编辑的内容。
+     * 关闭新文档即可撤回这次导入。
+     */
     suspend fun importDocument(context: Context, uri: Uri): ImportOutcome {
         _importing.value = true
         return try {
             val document = DocumentImporter.load(context, uri)
-            pushSnapshot(_editor.value)
-            setEditorText(document.text)
+            val path = DocumentImporter.displayPath(context, uri)
+            val doc = Doc(
+                id = newId(),
+                title = document.name,
+                subtitle = path.ifBlank { "导入的文件" },
+                uri = uri.toString(),
+                text = document.text,
+            )
+            _docs.update { listOf(doc) + it }
+            _activeDocId.value = doc.id
+            openDoc(doc.id)
+            scheduleSave()
             val hint = if (prefs.chunked && document.text.length > prefs.chunkLimit) "，发送时会自动分段" else ""
             maybeAutoBackup()
-            ImportOutcome(true, "已导入 ${document.name}（${document.text.length} 字）$hint")
+            ImportOutcome(true, "已打开 ${document.name}（${document.text.length} 字）$hint", doc.id)
         } catch (e: Exception) {
             ImportOutcome(false, "导入失败：${e.message ?: e.javaClass.simpleName}")
         } finally {
@@ -163,11 +347,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         setEditorText("")
     }
 
-    /** 撤销上一步：输入、导入、清空、应用结果都算一步。 */
+    /** 撤销上一步：输入、清空、应用结果都算一步，只影响当前这篇文档。 */
     fun undo(): Boolean {
-        val snapshot = undoStack.removeLastOrNull() ?: return false
-        redoStack.addLast(_editor.value)
-        burstActive = false
+        val history = history()
+        val snapshot = history.undo.removeLastOrNull() ?: return false
+        history.redo.addLast(_editor.value)
+        history.burstActive = false
         applyEditor(snapshot)
         refreshHistoryFlags()
         return true
@@ -175,9 +360,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 恢复刚撤销的那一步。 */
     fun redo(): Boolean {
-        val snapshot = redoStack.removeLastOrNull() ?: return false
-        undoStack.addLast(_editor.value)
-        burstActive = false
+        val history = history()
+        val snapshot = history.redo.removeLastOrNull() ?: return false
+        history.undo.addLast(_editor.value)
+        history.burstActive = false
         applyEditor(snapshot)
         refreshHistoryFlags()
         return true
@@ -186,6 +372,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private fun applyEditor(value: TextFieldValue) {
         _editor.value = value
         prefs.draft = value.text
+        updateActiveText(value.text)
     }
 
     /**
@@ -193,35 +380,40 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * 撤销时整段回退，而不是一个字一个字往回退。
      */
     private fun recordUndo(previous: TextFieldValue) {
+        val history = history()
         val now = android.os.SystemClock.uptimeMillis()
-        val continuing = burstActive && now - lastEditAt < BURST_WINDOW_MS
-        lastEditAt = now
-        burstActive = true
+        val continuing = history.burstActive && now - history.lastEditAt < BURST_WINDOW_MS
+        history.lastEditAt = now
+        history.burstActive = true
         if (continuing) {
             // 新输入一旦开始，原来的「恢复」分支就作废
-            redoStack.clear()
+            history.redo.clear()
             refreshHistoryFlags()
         } else {
             pushSnapshot(previous, keepBurst = true)
         }
     }
 
-    /** 导入、清空、应用结果这类一次性动作，各自占一步。 */
+    /** 清空、应用结果这类一次性动作，各自占一步。 */
     private fun pushSnapshot(snapshot: TextFieldValue, keepBurst: Boolean = false) {
-        undoStack.addLast(snapshot)
-        if (!keepBurst) burstActive = false
+        val history = history()
+        history.undo.addLast(snapshot)
+        if (!keepBurst) history.burstActive = false
         // 同时按步数与总字数回收，避免长文档下快照堆积占内存
-        var total = undoStack.sumOf { it.text.length }
-        while (undoStack.size > 1 && (undoStack.size > MAX_UNDO_STEPS || total > MAX_UNDO_CHARS)) {
-            total -= undoStack.removeFirst().text.length
+        var total = history.undo.sumOf { it.text.length }
+        while (history.undo.size > 1 &&
+            (history.undo.size > MAX_UNDO_STEPS || total > MAX_UNDO_CHARS)
+        ) {
+            total -= history.undo.removeFirst().text.length
         }
-        redoStack.clear()
+        history.redo.clear()
         refreshHistoryFlags()
     }
 
     private fun refreshHistoryFlags() {
-        _canUndo.value = undoStack.isNotEmpty()
-        _canRedo.value = redoStack.isNotEmpty()
+        val history = histories[_activeDocId.value]
+        _canUndo.value = history?.undo?.isNotEmpty() == true
+        _canRedo.value = history?.redo?.isNotEmpty() == true
     }
 
     // ------------------------------------------------------------ 配置
@@ -257,30 +449,28 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     suspend fun backupNow(): String {
-        val name = backupManager.backupNow()
+        val name = backupManager.backupNow(_docs.value)
         _backup.value = backupManager.settings()
         return name
     }
 
     suspend fun listBackups(): List<RemoteFile> = backupManager.listBackups()
 
-    /** 按覆盖 / 增量方式恢复，成功后立刻应用到编辑区与配置。 */
+    /** 按覆盖 / 增量方式恢复，成功后立刻应用到文档列表与配置。 */
     suspend fun restoreBackup(file: RemoteFile, mode: RestoreMode): String {
-        val result = backupManager.restore(file, mode)
+        val result = backupManager.restore(file, mode, _docs.value)
         prefs.saveConfig(result.config)
         prefs.restoreApiKeys(result.apiKeys, overwrite = mode == RestoreMode.OVERWRITE)
         // 写回各服务商 Key 后重新读一次，保证内存配置与磁盘一致
         _config.value = prefs.loadConfig()
-        pushSnapshot(_editor.value)
-        setEditorText(result.draft)
+        val docCount = applyRestoredDocs(result)
         prefs.chunked = result.chunked
         prefs.chunkLimit = result.chunkLimit
         _ai.update { it.copy(chunked = result.chunked, chunkLimit = result.chunkLimit) }
-        pendingRange = null
         _backup.value = backupManager.settings()
 
         return when (mode) {
-            RestoreMode.OVERWRITE -> "已覆盖恢复：配置 + 文档（${result.draft.length} 字）"
+            RestoreMode.OVERWRITE -> "已覆盖恢复：配置 + $docCount"
             RestoreMode.MERGE -> {
                 val filled = result.notes.filterNot { it.startsWith("本地文档") }
                 val keptLocalDoc = result.notes.any { it.startsWith("本地文档") }
@@ -296,13 +486,42 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * 把备份里的文档写回列表：覆盖模式整体替换，增量模式只补本地没有的。
+     * 老备份只有一篇 [MergeResult.draft]，此时按单独一篇处理。
+     * 返回给用户看的描述。
+     */
+    private fun applyRestoredDocs(result: MergeResult): String {
+        val incoming = result.documents
+        if (incoming.isEmpty()) {
+            // 老版本备份：只有一篇正文
+            if (result.draft.isBlank()) return "文档"
+            pushSnapshot(_editor.value)
+            setEditorText(result.draft)
+            return "文档（${result.draft.length} 字）"
+        }
+
+        val docs = DocCodec.reassign(incoming)
+        val replaced = result.overwriteDocs || _docs.value.all { it.text.isBlank() }
+        _docs.value = if (replaced) docs else _docs.value + docs
+        if (replaced) _activeDocId.value = docs.first().id
+        histories.clear()
+        openDoc(_activeDocId.value)
+        saveNow()
+        return if (replaced) {
+            "文档 ${docs.size} 篇（${docs.sumOf { it.text.length }} 字）"
+        } else {
+            "新增文档 ${docs.size} 篇"
+        }
+    }
+
     /** 到点就自动备份，失败静默（只在备份页留下结果）。 */
     fun maybeAutoBackup() {
         if (!backupManager.isAutoDue()) return
         // 既没有密钥也没有文档时不必生成一份空备份
         if (prefs.draft.isBlank() && prefs.loadConfig().apiKey.isBlank()) return
         viewModelScope.launch {
-            runCatching { backupManager.backupNow() }
+            runCatching { backupManager.backupNow(_docs.value) }
             _backup.value = backupManager.settings()
         }
     }
@@ -314,6 +533,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setRefineInstruction(text: String) = _ai.update { it.copy(refineInstruction = text) }
 
     fun setScope(scope: Scope) = _ai.update { it.copy(scope = scope) }
+
+    /**
+     * 打开面板前调用：上一次的结果若属于别的文档，先清掉，
+     * 避免在 A 文档生成的内容被写进 B 文档。
+     */
+    fun ensureSessionForActiveDoc() {
+        val state = _ai.value
+        if (state.running) return
+        if (state.docId != null && state.docId != _activeDocId.value) newSession()
+    }
 
     /** 在预览区手动修改 AI 结果：修改后的文本同样可应用、可二次 AI 编辑、可保存。 */
     fun setOutput(text: String) {
@@ -441,6 +670,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _ai.update {
             it.copy(
                 running = true,
+                docId = _activeDocId.value,
                 output = "",
                 status = when {
                     isRefine -> "正在按新指令修改结果…"
@@ -610,6 +840,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _ai.update {
             it.copy(
                 output = "",
+                docId = null,
                 sourceText = "",
                 versions = emptyList(),
                 status = "就绪。",
@@ -755,17 +986,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ------------------------------------------------------------ 结果处理
 
-    /** 把 AI 输出写回编辑区，成功返回 true。 */
+    /** 把 AI 输出写回它所属的文档，成功返回 true。 */
     fun applyResult(): Boolean {
-        val output = _ai.value.output.trim()
+        val state = _ai.value
+        val output = state.output.trim()
         if (output.isEmpty()) return false
-        val value = _editor.value
         val range = pendingRange
+        // 结果属于另一篇文档时先切过去，再写入；否则会改错文件
+        val targetId = state.docId
+        if (targetId != null && targetId != _activeDocId.value) {
+            if (_docs.value.none { it.id == targetId }) return false
+            switchDoc(targetId)
+            pendingRange = range
+        }
+        val value = _editor.value
         pushSnapshot(value)
         val (newText, cursor) = if (range == null) {
             // 生成模式下若用户在生成期间已经往编辑区写了内容，追加而不是覆盖
             val existing = value.text
-            if (_ai.value.generating && existing.isNotBlank()) {
+            if (state.generating && existing.isNotBlank()) {
                 val sep = if (existing.endsWith("\n")) "\n" else "\n\n"
                 val merged = existing + sep + output
                 merged to merged.length

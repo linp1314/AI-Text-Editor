@@ -2,16 +2,17 @@
 
 轻量的 Android 文本编辑器：接入**任意 OpenAI 兼容接口**，用一句自然语言指令润色、改写、翻译文本；可从手机导入 docx / pdf / txt 等文档，结果直接写回编辑区。
 
-当前版本 **1.9.0** ｜ [下载 APK](https://github.com/linp1314/AI-Text-Editor/releases/latest) ｜ 需要 Android 7.0+（arm64）
+当前版本 **1.10.0** ｜ [下载 APK](https://github.com/linp1314/AI-Text-Editor/releases/latest) ｜ 需要 Android 7.0+（arm64）
 
 ## 功能
 
 | 模块 | 说明 |
 | --- | --- |
-| 编辑区 | 全屏纯文本编辑，字数 / 行数统计，草稿自动保存 |
-| 撤销 / 恢复 | 顶栏一键撤销、恢复；连续输入合并成一步，导入与写回同样可撤 |
+| 多文档 | 同时打开多篇，左上角图标唤出列表随时切换；各篇内容、撤销记录、光标位置互不影响，长按可重命名 |
+| 编辑区 | 全屏纯文本编辑，字数 / 行数统计，所有打开的文档自动保存到本机 |
+| 撤销 / 恢复 | 顶栏一键撤销、恢复；连续输入合并成一步，清空与写回同样可撤，撤销栈按文档各自独立 |
 | 清空 | 顶栏清空整篇文档；AI 面板内清空当前结果，编辑区内容不受影响 |
-| 导入文档 | txt / md / csv / json / 代码 / html / **docx** / **pdf**，走系统文件选择器，不需要存储权限 |
+| 导入文档 | txt / md / csv / json / 代码 / html / **docx** / **pdf**，作为新文档打开，不覆盖正在编辑的内容；走系统文件选择器，不需要存储权限 |
 | 从零生成 | 编辑区为空时自动切到生成模式，写下要求就能直接产出内容，结果「写入」编辑区 |
 | AI 面板 | 一句话指令 + 快捷标签（润色 / 精简 / 纠错 / 翻译 / 扩写 / 改语气） |
 | 处理范围 | 整个文件 / 选中文本 / 当前段落 |
@@ -24,7 +25,7 @@
 | 拉取模型 | 点「拉取」请求 `{地址}/models` 取回可用模型，可搜索后点选 |
 | 系统提示词预设 | 默认编辑助手 / 代码助手 / 翻译助手 / 润色助手 / 精简助手，点一下套用，改字自动转为自定义 |
 | 结果历史 | 生成结果自动缓存到本机，默认 3 条，可自定义 0–20 条，填 0 关闭 |
-| WebDAV 备份 | 手动 / 自动（12 小时 / 每天 / 每周）备份配置与文档，恢复支持覆盖或增量 |
+| WebDAV 备份 | 手动 / 自动（12 小时 / 每天 / 每周）备份配置与全部打开的文档，恢复支持覆盖或增量，默认保留最近 5 份 |
 | 统一设置 | 只有右上角齿轮一个入口：接口、生成参数、系统提示词、历史、备份、关于都在这一页 |
 
 ## 快速上手
@@ -47,7 +48,7 @@
 
 - **API Key 只存在本机**：写入应用私有目录的 SharedPreferences，不上传任何第三方，请求直连你填写的接口地址，没有中间服务器。
 - **系统云备份已关闭**（`allowBackup=false`），API Key、草稿、结果历史不会随手机备份同步到 Google / 厂商云。
-- **WebDAV 备份是明文 JSON**，含接口地址、API Key 与当前文档。备份页有明确提示，请只放到自己可信的目录。
+- **WebDAV 备份是明文 JSON**，含接口地址、API Key 与所有打开的文档。备份页有明确提示，请只放到自己可信的目录。
 - **结果历史**存放在应用私有目录，可在设置里填 0 关闭，或随时在「历史」里删除、清空。
 - **导入文档**通过 SAF 只读取你选中的那一个文件，应用不申请存储权限。
 - 应用允许明文 HTTP，仅为兼容局域网自建服务；公网接口请一律用 `https://`。
@@ -84,6 +85,7 @@ app/src/main/java/com/aieditor/text/
 │   ├── ApiKeys.kt           API Key 按接口地址分槽
 │   ├── AiClient.kt          OkHttp + SSE 流式、模型列表、错误信息
 │   ├── DocumentImporter.kt  编码识别、docx / pdf / html 解析
+│   ├── DocumentStore.kt     多文档列表的本地存储与序列化
 │   ├── TextChunker.kt       长文切分与合并还原
 │   ├── TextDiff.kt          行级 LCS + 行内字符级 diff
 │   ├── WebDavClient.kt      PROPFIND / GET / PUT / MKCOL
@@ -94,7 +96,7 @@ app/src/main/java/com/aieditor/text/
 └── ui/                      主界面、AI 面板、配置、备份、历史、关于
 ```
 
-Kotlin 1.9.24 / Jetpack Compose（BOM 2024.09）/ Material 3 / OkHttp 4.12 / PdfBox-Android / AGP 8.5.2 / minSdk 24 / targetSdk 34。61 个单元测试覆盖端点推导、SSE 解析、密钥分槽、备份合并、切分、diff、提示词预设。依赖只有 Compose、OkHttp、PdfBox 与协程，**不含任何统计、广告或崩溃上报 SDK**。
+Kotlin 1.9.24 / Jetpack Compose（BOM 2024.09）/ Material 3 / OkHttp 4.12 / PdfBox-Android / AGP 8.5.2 / minSdk 24 / targetSdk 34。70 个单元测试覆盖端点推导、SSE 解析、密钥分槽、备份合并、切分、diff、提示词预设。依赖只有 Compose、OkHttp、PdfBox 与协程，**不含任何统计、广告或崩溃上报 SDK**。
 
 ## 发版
 
@@ -107,6 +109,12 @@ Kotlin 1.9.24 / Jetpack Compose（BOM 2024.09）/ Material 3 / OkHttp 4.12 / Pdf
 CI 的 `.github/workflows/release.yml` 在推送 `v*` tag 时跑测试 → 构建 → `zipalign -c -P 16` 校验 16KB 对齐 → 生成 `SHA256SUMS.txt` → 发布到 Releases（手动触发走草稿）。要产出与本地同一签名的包，在仓库 Secrets 里加 `ANDROID_KEYSTORE_BASE64`（keystore 的 base64）、`ANDROID_STORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`；不配也能跑，只是产物带 `-debug-signed` 后缀。
 
 ## 更新记录
+
+**1.10.0**（2026-11-13）
+- 支持同时打开多篇文档：左上角图标唤出列表，点一下切换，正文、撤销记录、光标位置各自独立
+- 导入与新建都作为新的一篇打开，不再覆盖当前内容；关闭只是移出列表，内容仍在本机，误关可撤销
+- 长按列表中的文档可重命名；左上角图标显示当前打开篇数
+- AI 结果只写回所属的那篇文档；WebDAV 备份与恢复一并包含所有打开的文档，老备份仍可正常恢复
 
 **1.9.0**（2026-11-13）
 - 设置统一到一个入口：右上角齿轮进入设置页，接口、生成参数、提示词、历史、备份、关于都在这一页
@@ -128,10 +136,6 @@ CI 的 `.github/workflows/release.yml` 在推送 `v*` tag 时跑测试 → 构�
 **1.6.1**（2026-11-13）
 - 关闭 Android 系统云备份，API Key、草稿与结果历史不再随手机备份同步到云端
 - WebDAV 备份页新增明文提示；更新记录精简为最近 5 个版本
-
-**1.6.0**（2026-11-13）
-- 生成结果自动缓存到本机，默认保留 3 条，可自定义 0–20 条，填 0 关闭
-- 面板右上角「历史」入口：查看时间 / 指令 / 字数，支持载入、删除、清空
 
 更早的版本见 [Releases](https://github.com/linp1314/AI-Text-Editor/releases)。
 

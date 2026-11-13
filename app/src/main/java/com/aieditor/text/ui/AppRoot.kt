@@ -1,5 +1,6 @@
 package com.aieditor.text.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -9,17 +10,26 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -27,8 +37,10 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -44,6 +56,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -53,6 +67,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aieditor.text.AppViewModel
 import com.aieditor.text.R
+import com.aieditor.text.data.Doc
 import kotlinx.coroutines.launch
 
 private val IMPORT_MIME_TYPES = arrayOf(
@@ -73,27 +88,50 @@ fun AppRoot(sharedText: String? = null, vm: AppViewModel = viewModel()) {
     val historyLimit by vm.historyLimit.collectAsState()
     val canUndo by vm.canUndo.collectAsState()
     val canRedo by vm.canRedo.collectAsState()
+    val docs by vm.docs.collectAsState()
+    val activeId by vm.activeDocId.collectAsState()
+    val importing by vm.importing.collectAsState()
 
     val snackbarHost = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
     var showPanel by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var showBackup by remember { mutableStateOf(false) }
     var showAbout by remember { mutableStateOf(false) }
+    var renaming by remember { mutableStateOf<Doc?>(null) }
     val context = LocalContext.current
-    val importing by vm.importing.collectAsState()
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+
+    val activeDoc = docs.firstOrNull { it.id == activeId }
+
+    // 打开文档列表前先收起键盘，否则抽屉会被输入法顶得只剩一小截
+    fun openDrawer() {
+        focusManager.clearFocus()
+        keyboard?.hide()
+        scope.launch { drawerState.open() }
+    }
+
+    fun openPanel() {
+        vm.ensureSessionForActiveDoc()
+        showPanel = true
+    }
 
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             scope.launch {
                 val outcome = vm.importDocument(context, uri)
+                drawerState.close()
                 if (outcome.success) {
                     val result = snackbarHost.showSnackbar(
                         message = outcome.message,
-                        actionLabel = "撤销",
+                        actionLabel = "关闭",
                         duration = SnackbarDuration.Long,
                     )
-                    if (result == SnackbarResult.ActionPerformed) vm.undo()
+                    if (result == SnackbarResult.ActionPerformed) {
+                        outcome.docId?.let { vm.closeDoc(it) }
+                    }
                 } else {
                     snackbarHost.showSnackbar(outcome.message)
                 }
@@ -110,139 +148,199 @@ fun AppRoot(sharedText: String? = null, vm: AppViewModel = viewModel()) {
 
     LaunchedEffect(sharedText) {
         if (!sharedText.isNullOrBlank()) {
-            vm.setEditorText(sharedText)
-            showPanel = true
+            vm.newDoc(title = "分享的文本", text = sharedText)
+            openPanel()
         }
+    }
+
+    BackHandler(enabled = drawerState.isOpen) {
+        scope.launch { drawerState.close() }
     }
 
     val text = editor.text
     val selectedCount = kotlin.math.abs(editor.selection.end - editor.selection.start)
 
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        snackbarHost = { SnackbarHost(snackbarHost) },
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text("AI 文本编辑", fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
-                        Text(
-                            text = if (config.apiKey.isBlank()) {
-                                "未配置密钥 · 打开右上角设置"
-                            } else {
-                                "${config.model} · 已连接"
-                            },
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
+    // 提示条放在抽屉外层：在文档列表里关闭文档时，撤销提示不会被抽屉挡住
+    Box(Modifier.fillMaxSize()) {
+        ModalNavigationDrawer(
+            drawerState = drawerState,
+            // 只通过左上角按钮打开，避免阅读时从边缘误滑出列表
+            gesturesEnabled = drawerState.isOpen,
+            drawerContent = {
+                DocDrawer(
+                    docs = docs,
+                    activeId = activeId,
+                    importing = importing,
+                    onSelect = { id ->
+                        vm.switchDoc(id)
+                        scope.launch { drawerState.close() }
+                    },
+                    onClose = { doc ->
+                        val closed = vm.closeDoc(doc.id)
+                        if (closed != null) {
+                            scope.launch {
+                                val result = snackbarHost.showSnackbar(
+                                    message = "已关闭「${closed.title}」",
+                                    actionLabel = "撤销",
+                                    duration = SnackbarDuration.Short,
+                                )
+                                if (result == SnackbarResult.ActionPerformed) vm.restoreDoc(closed)
+                            }
+                        }
+                    },
+                    onRename = { renaming = it },
+                    onNew = {
+                        vm.newDoc()
+                        scope.launch { drawerState.close() }
+                    },
+                    onImport = { importLauncher.launch(IMPORT_MIME_TYPES) },
+                )
+            },
+        ) {
+            Scaffold(
+                containerColor = MaterialTheme.colorScheme.background,
+                topBar = {
+                    TopAppBar(
+                        navigationIcon = {
+                            DocsButton(count = docs.size) { openDrawer() }
+                        },
+                        title = {
+                            Column {
+                                Text(
+                                    text = activeDoc?.title ?: "未命名",
+                                    fontSize = 17.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = when {
+                                        config.apiKey.isBlank() -> "未配置密钥 · 打开右上角设置"
+                                        !activeDoc?.subtitle.isNullOrBlank() -> activeDoc!!.subtitle
+                                        else -> "${config.model} · ${docs.size} 篇文档"
+                                    },
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        },
+                        // 顶栏只放编辑动作和一个设置入口，不再另设菜单
+                        actions = {
+                            ToolbarIcon(painter = R.drawable.ic_undo, label = "撤销", enabled = canUndo) {
+                                vm.undo()
+                            }
+                            ToolbarIcon(painter = R.drawable.ic_redo, label = "恢复", enabled = canRedo) {
+                                vm.redo()
+                            }
+                            ToolbarIcon(painter = R.drawable.ic_clear, label = "清空文档", enabled = text.isNotEmpty()) {
+                                vm.clearEditor()
+                                scope.launch {
+                                    val result = snackbarHost.showSnackbar(
+                                        message = "已清空文档",
+                                        actionLabel = "撤销",
+                                        duration = SnackbarDuration.Short,
+                                    )
+                                    if (result == SnackbarResult.ActionPerformed) vm.undo()
+                                }
+                            }
+                            ToolbarIcon(icon = Icons.Filled.Settings, label = "设置") { showSettings = true }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+                    )
                 },
-                // 顶栏只放编辑动作和一个设置入口，不再另设菜单
-                actions = {
-                    ToolbarIcon(painter = R.drawable.ic_undo, label = "撤销", enabled = canUndo) {
-                        vm.undo()
-                    }
-                    ToolbarIcon(painter = R.drawable.ic_redo, label = "恢复", enabled = canRedo) {
-                        vm.redo()
-                    }
-                    ToolbarIcon(painter = R.drawable.ic_clear, label = "清空文档", enabled = text.isNotEmpty()) {
-                        vm.clearEditor()
-                        scope.launch {
-                            val result = snackbarHost.showSnackbar(
-                                message = "已清空文档",
-                                actionLabel = "撤销",
-                                duration = SnackbarDuration.Short,
+                bottomBar = {
+                    Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 3.dp) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    "${text.length} 字 · ${text.count { it == '\n' } + if (text.isEmpty()) 0 else 1} 行",
+                                    fontSize = 12.sp,
+                                )
+                                Text(
+                                    text = if (selectedCount > 0) "已选中 $selectedCount 字" else "长按可选文本",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.outline,
+                                )
+                            }
+                            OutlineButton(
+                                text = if (importing) "导入中" else "导入",
+                                modifier = Modifier.width(76.dp),
+                                enabled = !importing,
+                                height = 42.dp,
+                            ) { importLauncher.launch(IMPORT_MIME_TYPES) }
+                            if (importing) {
+                                Spacer(Modifier.width(6.dp))
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(14.dp),
+                                    strokeWidth = 2.dp,
+                                    color = BrandGreen,
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            PrimaryButton(
+                                text = "AI 编辑",
+                                modifier = Modifier.width(100.dp),
+                                height = 42.dp,
+                                // 空白文档也能打开：面板会自动进入「从零生成」模式
+                                onClick = { openPanel() },
                             )
-                            if (result == SnackbarResult.ActionPerformed) vm.undo()
                         }
                     }
-                    ToolbarIcon(icon = Icons.Filled.Settings, label = "设置") { showSettings = true }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
-            )
-        },
-        bottomBar = {
-            Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 3.dp) {
-                Row(
+            ) { padding ->
+                Column(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                        .padding(padding)
+                        .fillMaxSize()
+                        .padding(horizontal = 18.dp),
                 ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            "${text.length} 字 · ${text.count { it == '\n' } + if (text.isEmpty()) 0 else 1} 行",
-                            fontSize = 12.sp,
-                        )
-                        Text(
-                            text = if (selectedCount > 0) "已选中 $selectedCount 字" else "长按可选文本",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.outline,
-                        )
-                    }
-                    OutlineButton(
-                        text = if (importing) "导入中" else "导入",
-                        modifier = Modifier.width(76.dp),
-                        enabled = !importing,
-                        height = 42.dp,
-                    ) { importLauncher.launch(IMPORT_MIME_TYPES) }
-                    if (importing) {
-                        Spacer(Modifier.width(6.dp))
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(14.dp),
-                            strokeWidth = 2.dp,
-                            color = BrandGreen,
-                        )
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    PrimaryButton(
-                        text = "AI 编辑",
-                        modifier = Modifier.width(100.dp),
-                        height = 42.dp,
-                        // 空白文档也能打开：面板会自动进入「从零生成」模式
-                        onClick = { showPanel = true },
+                    BasicTextField(
+                        value = editor,
+                        onValueChange = vm::onEditorChange,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(top = 6.dp),
+                        textStyle = TextStyle(
+                            fontSize = 16.sp,
+                            lineHeight = 26.sp,
+                            color = MaterialTheme.colorScheme.onBackground,
+                        ),
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                        decorationBox = { inner ->
+                            Box(Modifier.fillMaxSize()) {
+                                if (text.isEmpty()) {
+                                    Text(
+                                        "在这里输入或粘贴需要编辑的文本…\n\n" +
+                                            "写好后点右下角「AI 编辑」，用一句话告诉 AI 你要改什么。\n" +
+                                            "也可以什么都不写，直接描述要求让它从零生成。\n\n" +
+                                            "左上角图标可以打开多篇文档，随时切换、互不打断。",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                                        fontSize = 15.sp,
+                                        lineHeight = 24.sp,
+                                    )
+                                }
+                                inner()
+                            }
+                        },
                     )
                 }
             }
-        },
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .padding(padding)
-                .fillMaxSize()
-                .padding(horizontal = 18.dp),
-        ) {
-            BasicTextField(
-                value = editor,
-                onValueChange = vm::onEditorChange,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(top = 6.dp),
-                textStyle = TextStyle(
-                    fontSize = 16.sp,
-                    lineHeight = 26.sp,
-                    color = MaterialTheme.colorScheme.onBackground,
-                ),
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                decorationBox = { inner ->
-                    Box(Modifier.fillMaxSize()) {
-                        if (text.isEmpty()) {
-                            Text(
-                                "在这里输入或粘贴需要编辑的文本…\n\n" +
-                                    "写好后点右下角「AI 编辑」，用一句话告诉 AI 你要改什么。\n" +
-                                    "也可以什么都不写，直接描述要求让它从零生成。",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
-                                fontSize = 15.sp,
-                                lineHeight = 24.sp,
-                            )
-                        }
-                        inner()
-                    }
-                },
-            )
         }
+
+    SnackbarHost(
+        hostState = snackbarHost,
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .navigationBarsPadding()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+    )
     }
 
     if (showPanel) {
@@ -302,6 +400,83 @@ fun AppRoot(sharedText: String? = null, vm: AppViewModel = viewModel()) {
 
     if (showAbout) {
         AboutDialog(onDismiss = { showAbout = false })
+    }
+
+    renaming?.let { target ->
+        RenameDialog(
+            initial = target.title,
+            onDismiss = { renaming = null },
+            onConfirm = { name ->
+                vm.renameDoc(target.id, name)
+                renaming = null
+            },
+        )
+    }
+}
+
+/** 重命名对话框：长按文档列表里的某一行触发。 */
+@Composable
+private fun RenameDialog(
+    initial: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var value by remember(initial) { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+        title = { Text("重命名文档", fontSize = 17.sp, fontWeight = FontWeight.SemiBold) },
+        text = {
+            OutlinedTextField(
+                value = value,
+                onValueChange = { value = it },
+                singleLine = true,
+                label = { Text("名称") },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(Ui.radius),
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(value) },
+                enabled = value.isNotBlank(),
+            ) { Text("确定", color = BrandGreen) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
+    )
+}
+
+/** 左上角文档列表入口：图标右上角带打开篇数。 */
+@Composable
+private fun DocsButton(count: Int, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(44.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        BadgedBox(
+            badge = {
+                if (count > 1) {
+                    Badge(
+                        containerColor = BrandGreen,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                    ) { Text("$count", fontSize = 9.sp) }
+                }
+            },
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.List,
+                contentDescription = "文档列表",
+                modifier = Modifier.size(21.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
