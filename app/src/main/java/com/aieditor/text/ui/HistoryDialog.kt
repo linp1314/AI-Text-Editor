@@ -47,7 +47,6 @@ fun HistoryDialog(
     onLoad: (HistoryEntry) -> Unit,
     onDelete: (Long) -> Unit,
     onClear: () -> Unit,
-    onOpenSettings: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     var confirmClear by remember { mutableStateOf(false) }
@@ -110,7 +109,11 @@ fun HistoryDialog(
                             color = MaterialTheme.colorScheme.outline,
                         )
                         Spacer(Modifier.height(14.dp))
-                        TextButton(onClick = onOpenSettings) { Text("去调整保留条数", fontSize = 13.sp) }
+                        Text(
+                            "保留条数在主界面右上角「设置」里调整",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.outline,
+                        )
                     }
                 } else {
                     LazyColumn(

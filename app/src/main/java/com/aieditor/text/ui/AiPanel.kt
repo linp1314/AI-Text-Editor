@@ -31,7 +31,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -97,7 +96,6 @@ fun AiPanelDialog(
     config: ApiConfig,
     onClose: () -> Unit,
     onApply: () -> Unit,
-    onOpenSettings: () -> Unit,
 ) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
@@ -191,17 +189,6 @@ fun AiPanelDialog(
                                 if (history.isEmpty()) "历史" else "历史 ${history.size}",
                                 fontSize = 13.sp,
                                 color = if (historyLimit <= 0) MaterialTheme.colorScheme.outline else BrandGreen,
-                            )
-                        }
-                        IconButton(
-                            onClick = onOpenSettings,
-                            modifier = Modifier.size(36.dp),
-                        ) {
-                            Icon(
-                                Icons.Filled.Settings,
-                                contentDescription = "配置",
-                                modifier = Modifier.size(18.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                         IconButton(onClick = onClose, modifier = Modifier.size(36.dp)) {
@@ -535,6 +522,17 @@ fun AiPanelDialog(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         OutlineButton(
+                            text = "清空",
+                            modifier = Modifier.weight(1f),
+                            enabled = displayText.isNotBlank() && !state.running,
+                        ) {
+                            // 只清预览，不动编辑区；结果历史里通常还留着一份
+                            editing = false
+                            showDiff = false
+                            vm.clearOutput()
+                            coroutine.launch { snackbarHost.showSnackbar("已清空结果，可在历史里找回") }
+                        }
+                        OutlineButton(
                             text = "复制",
                             modifier = Modifier.weight(1f),
                             enabled = displayText.isNotBlank(),
@@ -591,10 +589,6 @@ fun AiPanelDialog(
             },
             onDelete = vm::deleteHistory,
             onClear = vm::clearHistory,
-            onOpenSettings = {
-                showHistory = false
-                onOpenSettings()
-            },
             onDismiss = { showHistory = false },
         )
     }

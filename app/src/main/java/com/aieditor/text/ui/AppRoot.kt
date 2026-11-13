@@ -2,26 +2,23 @@ package com.aieditor.text.ui
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
@@ -43,14 +40,19 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aieditor.text.AppViewModel
+import com.aieditor.text.R
 import kotlinx.coroutines.launch
 
 private val IMPORT_MIME_TYPES = arrayOf(
@@ -69,6 +71,8 @@ fun AppRoot(sharedText: String? = null, vm: AppViewModel = viewModel()) {
     val config by vm.config.collectAsState()
     val backup by vm.backup.collectAsState()
     val historyLimit by vm.historyLimit.collectAsState()
+    val canUndo by vm.canUndo.collectAsState()
+    val canRedo by vm.canRedo.collectAsState()
 
     val snackbarHost = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -76,7 +80,6 @@ fun AppRoot(sharedText: String? = null, vm: AppViewModel = viewModel()) {
     var showSettings by remember { mutableStateOf(false) }
     var showBackup by remember { mutableStateOf(false) }
     var showAbout by remember { mutableStateOf(false) }
-    var showMenu by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val importing by vm.importing.collectAsState()
 
@@ -125,50 +128,37 @@ fun AppRoot(sharedText: String? = null, vm: AppViewModel = viewModel()) {
                         Text("AI 文本编辑", fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
                         Text(
                             text = if (config.apiKey.isBlank()) {
-                                "未配置密钥 · 右上角菜单里设置"
+                                "未配置密钥 · 打开右上角设置"
                             } else {
                                 "${config.model} · 已连接"
                             },
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 },
+                // 顶栏只放编辑动作和一个设置入口，不再另设菜单
                 actions = {
-                    // 清空、设置、备份、关于收进一个菜单，顶栏只留一个入口
-                    Box {
-                        IconButton(onClick = { showMenu = true }) {
-                            Icon(
-                                Icons.Filled.MoreVert,
-                                contentDescription = "更多",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    ToolbarIcon(painter = R.drawable.ic_undo, label = "撤销", enabled = canUndo) {
+                        vm.undo()
+                    }
+                    ToolbarIcon(painter = R.drawable.ic_redo, label = "恢复", enabled = canRedo) {
+                        vm.redo()
+                    }
+                    ToolbarIcon(painter = R.drawable.ic_clear, label = "清空文档", enabled = text.isNotEmpty()) {
+                        vm.clearEditor()
+                        scope.launch {
+                            val result = snackbarHost.showSnackbar(
+                                message = "已清空文档",
+                                actionLabel = "撤销",
+                                duration = SnackbarDuration.Short,
                             )
-                        }
-                        DropdownMenu(
-                            expanded = showMenu,
-                            onDismissRequest = { showMenu = false },
-                            shape = RoundedCornerShape(Ui.radius),
-                            containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                            tonalElevation = 3.dp,
-                        ) {
-                            MenuItem("清空文档", enabled = text.isNotEmpty()) {
-                                showMenu = false
-                                vm.clearEditor()
-                            }
-                            MenuItem("接口与模型设置") {
-                                showMenu = false
-                                showSettings = true
-                            }
-                            MenuItem("WebDAV 备份") {
-                                showMenu = false
-                                showBackup = true
-                            }
-                            MenuItem("关于与更新记录") {
-                                showMenu = false
-                                showAbout = true
-                            }
+                            if (result == SnackbarResult.ActionPerformed) vm.undo()
                         }
                     }
+                    ToolbarIcon(icon = Icons.Filled.Settings, label = "设置") { showSettings = true }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
             )
@@ -274,7 +264,6 @@ fun AppRoot(sharedText: String? = null, vm: AppViewModel = viewModel()) {
                     }
                 }
             },
-            onOpenSettings = { showSettings = true },
         )
     }
 
@@ -316,17 +305,41 @@ fun AppRoot(sharedText: String? = null, vm: AppViewModel = viewModel()) {
     }
 }
 
+/** 顶栏图标按钮：矢量资源或内置图标都能用，禁用时整体变淡。 */
 @Composable
-private fun MenuItem(text: String, enabled: Boolean = true, onClick: () -> Unit) {
-    DropdownMenuItem(
-        text = {
-            Text(
-                text = text,
-                fontSize = 14.sp,
-                color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
+private fun ToolbarIcon(
+    label: String,
+    enabled: Boolean = true,
+    painter: Int? = null,
+    icon: ImageVector? = null,
+    onClick: () -> Unit,
+) {
+    val tint = if (enabled) {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    } else {
+        MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+    }
+    Box(
+        modifier = Modifier
+            .size(40.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (painter != null) {
+            Icon(
+                painter = painterResource(painter),
+                contentDescription = label,
+                modifier = Modifier.size(20.dp),
+                tint = tint,
             )
-        },
-        enabled = enabled,
-        onClick = onClick,
-    )
+        } else if (icon != null) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                modifier = Modifier.size(20.dp),
+                tint = tint,
+            )
+        }
+    }
 }

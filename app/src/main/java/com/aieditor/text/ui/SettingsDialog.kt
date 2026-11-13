@@ -1,32 +1,33 @@
 package com.aieditor.text.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -49,11 +50,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -61,9 +64,14 @@ import androidx.compose.ui.window.DialogProperties
 import com.aieditor.text.data.ApiConfig
 import com.aieditor.text.data.ApiKeySwitcher
 import com.aieditor.text.data.Presets
+import com.aieditor.text.data.PromptPresets
 import kotlinx.coroutines.launch
 import java.util.Locale
 
+/**
+ * 全应用唯一的设置页：接口、生成参数、系统提示词、历史、备份、关于都在这里。
+ * 顶层不再有第二个设置入口。
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsDialog(
@@ -125,7 +133,7 @@ fun SettingsDialog(
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.fillMaxSize()) {
                 TopAppBar(
-                    title = { Text("配置 API", fontSize = 19.sp, fontWeight = FontWeight.SemiBold) },
+                    title = { Text("设置", fontSize = 19.sp, fontWeight = FontWeight.SemiBold) },
                     navigationIcon = {
                         IconButton(onClick = onDismiss) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
@@ -140,6 +148,8 @@ fun SettingsDialog(
                         .verticalScroll(rememberScrollState())
                         .padding(horizontal = 18.dp),
                 ) {
+                    // ------------------------------------------------ AI 接口
+                    SectionHeader("AI 接口")
                     Text(
                         "支持任何兼容 OpenAI Chat Completions 的服务。选下面任意预设可一键填入，也可以选「自定义」自己填地址与模型名。",
                         fontSize = 12.sp,
@@ -147,9 +157,7 @@ fun SettingsDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
 
-                    Spacer(Modifier.height(14.dp))
-                    Text("快速预设", fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                    Spacer(Modifier.height(6.dp))
+                    Spacer(Modifier.height(10.dp))
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -177,7 +185,7 @@ fun SettingsDialog(
                         }
                     }
 
-                    Spacer(Modifier.height(14.dp))
+                    Spacer(Modifier.height(12.dp))
                     Field(
                         label = "接口地址 Base URL",
                         value = baseUrl,
@@ -259,9 +267,46 @@ fun SettingsDialog(
                         )
                     }
 
-                    Spacer(Modifier.height(16.dp))
-                    Text("生成参数", fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(12.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlineButton(
+                            text = if (testing) "正在测试…" else "测试连接",
+                            enabled = !testing,
+                            onClick = {
+                                testing = true
+                                testResult = ""
+                                scope.launch {
+                                    testResult = onTest(collect())
+                                    testing = false
+                                }
+                            },
+                        )
+                        Spacer(Modifier.weight(1f))
+                        TextButton(onClick = {
+                            applyUrl(
+                                ApiConfig.DEFAULT_BASE_URL,
+                                newModel = ApiConfig.DEFAULT_MODEL,
+                                newPrompt = ApiConfig.DEFAULT_SYSTEM_PROMPT,
+                            )
+                            temperature = 0.6f
+                            maxTokens = "4096"
+                            stream = true
+                        }) {
+                            Text("恢复默认", fontSize = 13.sp)
+                        }
+                    }
+                    if (testResult.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            testResult,
+                            fontSize = 12.sp,
+                            lineHeight = 18.sp,
+                            color = if (testResult.startsWith("连接成功")) BrandGreen else MaterialTheme.colorScheme.error,
+                        )
+                    }
+
+                    // ------------------------------------------------ 生成参数
+                    SectionHeader("生成参数")
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("温度", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(Modifier.width(8.dp))
@@ -307,74 +352,52 @@ fun SettingsDialog(
                         Switch(checked = stream, onCheckedChange = { stream = it })
                     }
 
-                    Spacer(Modifier.height(14.dp))
+                    // ------------------------------------------------ 系统提示词
+                    SectionHeader("系统提示词")
+                    Text(
+                        "决定模型以什么身份、按什么规矩处理内容。点一条预设即套用，改一个字就按下面的自定义内容生效。",
+                        fontSize = 12.sp,
+                        lineHeight = 18.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    val currentPreset = PromptPresets.match(systemPrompt)
+                    PromptPresets.all.forEach { preset ->
+                        PromptPresetRow(
+                            name = preset.name,
+                            summary = preset.summary,
+                            selected = currentPreset?.name == preset.name,
+                            onClick = { systemPrompt = preset.prompt },
+                        )
+                    }
+
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "System Prompt（自定义）",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Spacer(Modifier.height(6.dp))
                     OutlinedTextField(
                         value = systemPrompt,
                         onValueChange = { systemPrompt = it },
-                        label = { Text("系统提示词") },
                         modifier = Modifier.fillMaxWidth(),
                         minLines = 5,
                         maxLines = 10,
-                        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, lineHeight = 20.sp),
-                        shape = RoundedCornerShape(10.dp),
+                        textStyle = TextStyle(fontSize = 13.sp, lineHeight = 20.sp),
+                        shape = RoundedCornerShape(Ui.radius),
                         colors = OutlinedTextFieldDefaults.colors(
                             unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
                         ),
                     )
 
-                    Spacer(Modifier.height(14.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlineButton(
-                            text = if (testing) "正在测试…" else "测试连接",
-                            enabled = !testing,
-                            onClick = {
-                                testing = true
-                                testResult = ""
-                                scope.launch {
-                                    testResult = onTest(collect())
-                                    testing = false
-                                }
-                            },
-                        )
-                        Spacer(Modifier.weight(1f))
-                        TextButton(onClick = {
-                            applyUrl(
-                                ApiConfig.DEFAULT_BASE_URL,
-                                newModel = ApiConfig.DEFAULT_MODEL,
-                                newPrompt = ApiConfig.DEFAULT_SYSTEM_PROMPT,
-                            )
-                            temperature = 0.6f
-                            maxTokens = "4096"
-                            stream = true
-                        }) {
-                            Text("恢复默认", fontSize = 13.sp)
-                        }
-                    }
-
-                    if (testResult.isNotEmpty()) {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            testResult,
-                            fontSize = 12.sp,
-                            lineHeight = 18.sp,
-                            color = if (testResult.startsWith("连接成功")) BrandGreen else MaterialTheme.colorScheme.error,
-                        )
-                    }
-
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        "密钥保存在本机应用私有目录，仅用于向你自己填写的接口发请求；本应用不经过任何中间服务器。",
-                        fontSize = 11.sp,
-                        lineHeight = 17.sp,
-                        color = MaterialTheme.colorScheme.outline,
-                    )
-
-                    Spacer(Modifier.height(18.dp))
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    Spacer(Modifier.height(12.dp))
+                    // ------------------------------------------------ 其他
+                    SectionHeader("其他")
                     HistoryLimitSetting(limit = historyLimit, onChange = onHistoryLimitChange)
-                    Spacer(Modifier.height(10.dp))
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.outlineVariant,
+                        modifier = Modifier.padding(vertical = 4.dp),
+                    )
                     SettingsEntry(
                         title = "WebDAV 备份",
                         subtitle = "备份配置与文档，支持手动 / 自动备份",
@@ -384,6 +407,14 @@ fun SettingsDialog(
                         title = "关于",
                         subtitle = "版本号与更新记录",
                         onClick = onOpenAbout,
+                    )
+
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "密钥保存在本机应用私有目录，仅用于向你自己填写的接口发请求；本应用不经过任何中间服务器。",
+                        fontSize = 11.sp,
+                        lineHeight = 17.sp,
+                        color = MaterialTheme.colorScheme.outline,
                     )
                     Spacer(Modifier.height(20.dp))
                 }
@@ -444,6 +475,72 @@ fun SettingsDialog(
     }
 }
 
+/** 分组标题：绿色小字 + 上间距，替代此前的整页分隔线。 */
+@Composable
+private fun SectionHeader(title: String) {
+    Spacer(Modifier.height(18.dp))
+    Text(
+        text = title,
+        fontSize = 13.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = BrandGreen,
+    )
+    Spacer(Modifier.height(6.dp))
+}
+
+/** 系统提示词预设行：点一下套用，右侧小圆点表示当前生效的那条。 */
+@Composable
+private fun PromptPresetRow(
+    name: String,
+    summary: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Ui.radius))
+            .background(if (selected) BrandGreen.copy(alpha = 0.09f) else androidx.compose.ui.graphics.Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = name,
+                fontSize = 14.sp,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                color = if (selected) BrandGreen else scheme.onSurface,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = summary,
+                fontSize = 11.sp,
+                lineHeight = 15.sp,
+                color = scheme.outline,
+            )
+        }
+        Spacer(Modifier.width(10.dp))
+        Box(
+            modifier = Modifier
+                .size(18.dp)
+                .clip(CircleShape)
+                .border(1.5.dp, if (selected) BrandGreen else scheme.outlineVariant, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (selected) {
+                Box(
+                    Modifier
+                        .size(9.dp)
+                        .clip(CircleShape)
+                        .background(BrandGreen),
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun ModelPickerDialog(
     models: List<String>,
@@ -477,7 +574,7 @@ private fun ModelPickerDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(10.dp),
-                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp),
+                    textStyle = TextStyle(fontSize = 13.sp),
                     colors = OutlinedTextFieldDefaults.colors(
                         unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
                     ),

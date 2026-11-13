@@ -112,12 +112,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val historyLimit: StateFlow<Int> = _historyLimit.asStateFlow()
 
     private var job: Job? = null
-    private var undoSnapshot: TextFieldValue? = null
     private var pendingRange: IntRange? = null
+
+    // 编辑区撤销 / 恢复：存整份快照，连续输入合并成一步
+    private val undoStack = ArrayDeque<TextFieldValue>()
+    private val redoStack = ArrayDeque<TextFieldValue>()
+    private var lastEditAt = 0L
+    private var burstActive = false
+
+    private val _canUndo = MutableStateFlow(false)
+    val canUndo: StateFlow<Boolean> = _canUndo.asStateFlow()
+
+    private val _canRedo = MutableStateFlow(false)
+    val canRedo: StateFlow<Boolean> = _canRedo.asStateFlow()
 
     // ------------------------------------------------------------ 编辑区
 
     fun onEditorChange(value: TextFieldValue) {
+        val previous = _editor.value
+        if (value.text != previous.text) recordUndo(previous)
         _editor.value = value
         prefs.draft = value.text
     }
@@ -132,7 +145,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _importing.value = true
         return try {
             val document = DocumentImporter.load(context, uri)
-            undoSnapshot = _editor.value
+            pushSnapshot(_editor.value)
             setEditorText(document.text)
             val hint = if (prefs.chunked && document.text.length > prefs.chunkLimit) "，发送时会自动分段" else ""
             maybeAutoBackup()
@@ -145,17 +158,71 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun clearEditor() {
-        undoSnapshot = _editor.value
+        if (_editor.value.text.isEmpty()) return
+        pushSnapshot(_editor.value)
         setEditorText("")
     }
 
-    fun undo() {
-        val snapshot = undoSnapshot ?: return
-        undoSnapshot = null
-        onEditorChange(snapshot)
+    /** 撤销上一步：输入、导入、清空、应用结果都算一步。 */
+    fun undo(): Boolean {
+        val snapshot = undoStack.removeLastOrNull() ?: return false
+        redoStack.addLast(_editor.value)
+        burstActive = false
+        applyEditor(snapshot)
+        refreshHistoryFlags()
+        return true
     }
 
-    fun hasUndo(): Boolean = undoSnapshot != null
+    /** 恢复刚撤销的那一步。 */
+    fun redo(): Boolean {
+        val snapshot = redoStack.removeLastOrNull() ?: return false
+        undoStack.addLast(_editor.value)
+        burstActive = false
+        applyEditor(snapshot)
+        refreshHistoryFlags()
+        return true
+    }
+
+    private fun applyEditor(value: TextFieldValue) {
+        _editor.value = value
+        prefs.draft = value.text
+    }
+
+    /**
+     * 连续输入合并成一步：800 ms 内的连击只记起始状态，
+     * 撤销时整段回退，而不是一个字一个字往回退。
+     */
+    private fun recordUndo(previous: TextFieldValue) {
+        val now = android.os.SystemClock.uptimeMillis()
+        val continuing = burstActive && now - lastEditAt < BURST_WINDOW_MS
+        lastEditAt = now
+        burstActive = true
+        if (continuing) {
+            // 新输入一旦开始，原来的「恢复」分支就作废
+            redoStack.clear()
+            refreshHistoryFlags()
+        } else {
+            pushSnapshot(previous, keepBurst = true)
+        }
+    }
+
+    /** 导入、清空、应用结果这类一次性动作，各自占一步。 */
+    private fun pushSnapshot(snapshot: TextFieldValue, keepBurst: Boolean = false) {
+        undoStack.addLast(snapshot)
+        if (!keepBurst) burstActive = false
+        // 同时按步数与总字数回收，避免长文档下快照堆积占内存
+        var total = undoStack.sumOf { it.text.length }
+        while (undoStack.size > 1 && (undoStack.size > MAX_UNDO_STEPS || total > MAX_UNDO_CHARS)) {
+            total -= undoStack.removeFirst().text.length
+        }
+        redoStack.clear()
+        refreshHistoryFlags()
+    }
+
+    private fun refreshHistoryFlags() {
+        _canUndo.value = undoStack.isNotEmpty()
+        _canRedo.value = redoStack.isNotEmpty()
+    }
 
     // ------------------------------------------------------------ 配置
 
@@ -204,6 +271,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         prefs.restoreApiKeys(result.apiKeys, overwrite = mode == RestoreMode.OVERWRITE)
         // 写回各服务商 Key 后重新读一次，保证内存配置与磁盘一致
         _config.value = prefs.loadConfig()
+        pushSnapshot(_editor.value)
         setEditorText(result.draft)
         prefs.chunked = result.chunked
         prefs.chunkLimit = result.chunkLimit
@@ -542,12 +610,23 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _ai.update {
             it.copy(
                 output = "",
+                sourceText = "",
                 versions = emptyList(),
                 status = "就绪。",
                 isError = false,
+                generating = false,
                 outputEdited = false,
+                refineInstruction = "",
+                chunkCount = 0,
+                chunkProgress = 0,
             )
         }
+    }
+
+    /** 清空预览区的结果，回到刚打开面板的状态（历史里仍留有副本）。 */
+    fun clearOutput() {
+        if (_ai.value.running) return
+        newSession()
     }
 
     private fun buildMessages(
@@ -682,7 +761,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (output.isEmpty()) return false
         val value = _editor.value
         val range = pendingRange
-        undoSnapshot = value
+        pushSnapshot(value)
         val (newText, cursor) = if (range == null) {
             // 生成模式下若用户在生成期间已经往编辑区写了内容，追加而不是覆盖
             val existing = value.text
@@ -722,5 +801,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun notify(text: String) {
         _messages.tryEmit(text)
+    }
+
+    private companion object {
+        /** 撤销栈最多保留的步数。 */
+        const val MAX_UNDO_STEPS = 60
+        /** 撤销栈里快照正文的总字数上限，超出后从最旧的开始丢。 */
+        const val MAX_UNDO_CHARS = 2_000_000
+        /** 两次输入间隔小于该值时合并为一步撤销。 */
+        const val BURST_WINDOW_MS = 800L
     }
 }
