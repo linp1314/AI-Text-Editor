@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -50,6 +51,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -75,6 +77,9 @@ fun SettingsDialog(
     lookupKey: (String) -> String = { "" },
     /** 拉取该地址的可用模型列表。 */
     onFetchModels: suspend (ApiConfig) -> List<String> = { emptyList() },
+    /** 结果历史保留条数（0 = 关闭）。 */
+    historyLimit: Int = 3,
+    onHistoryLimitChange: (Int) -> Unit = {},
 ) {
     var baseUrl by remember { mutableStateOf(initial.baseUrl) }
     var apiKey by remember { mutableStateOf(initial.apiKey) }
@@ -373,6 +378,10 @@ fun SettingsDialog(
 
                     Spacer(Modifier.height(18.dp))
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Spacer(Modifier.height(12.dp))
+                    HistoryLimitSetting(limit = historyLimit, onChange = onHistoryLimitChange)
+                    Spacer(Modifier.height(10.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     SettingsEntry(
                         title = "WebDAV 备份",
                         subtitle = "备份配置与文档，支持手动 / 自动备份",
@@ -550,6 +559,50 @@ private fun Field(
             unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
         ),
     )
+}
+
+@Composable
+private fun HistoryLimitSetting(limit: Int, onChange: (Int) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("结果历史", fontSize = 14.sp)
+            Text(
+                when (limit) {
+                    0 -> "已关闭：生成结果不保存到本地"
+                    else -> "本机保留最近 $limit 条生成结果，超出后删最旧的"
+                },
+                fontSize = 11.sp,
+                lineHeight = 16.sp,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+        OutlinedButton(
+            onClick = { onChange((limit - 1).coerceAtLeast(0)) },
+            enabled = limit > 0,
+            modifier = Modifier
+                .width(38.dp)
+                .height(36.dp),
+            contentPadding = PaddingValues(0.dp),
+            shape = RoundedCornerShape(9.dp),
+        ) { Text("−", fontSize = 16.sp) }
+        Text(
+            "$limit",
+            modifier = Modifier.width(34.dp),
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Medium,
+            textAlign = TextAlign.Center,
+            color = if (limit == 0) MaterialTheme.colorScheme.outline else BrandGreen,
+        )
+        OutlinedButton(
+            onClick = { onChange((limit + 1).coerceAtMost(20)) },
+            enabled = limit < 20,
+            modifier = Modifier
+                .width(38.dp)
+                .height(36.dp),
+            contentPadding = PaddingValues(0.dp),
+            shape = RoundedCornerShape(9.dp),
+        ) { Text("+", fontSize = 16.sp) }
+    }
 }
 
 @Composable

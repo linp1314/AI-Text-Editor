@@ -66,6 +66,9 @@ fun AiPanelDialog(
     val snackbarHost = remember { SnackbarHostState() }
     var showExport by remember { mutableStateOf(false) }
     var showRefine by remember { mutableStateOf(false) }
+    var showHistory by remember { mutableStateOf(false) }
+    val history by vm.history.collectAsState()
+    val historyLimit by vm.historyLimit.collectAsState()
     val displayText = state.output
     // 当前范围若开启分段，预计会切成几段
     val editorState by vm.editor.collectAsState()
@@ -126,6 +129,17 @@ fun AiPanelDialog(
                                 color = MaterialTheme.colorScheme.outline,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        TextButton(
+                            onClick = { showHistory = true },
+                            contentPadding = PaddingValues(horizontal = 8.dp),
+                            modifier = Modifier.height(34.dp),
+                        ) {
+                            Text(
+                                if (history.isEmpty()) "历史" else "历史 ${history.size}",
+                                fontSize = 13.sp,
+                                color = if (historyLimit <= 0) MaterialTheme.colorScheme.outline else BrandGreen,
                             )
                         }
                         IconButton(onClick = onClose) {
@@ -446,6 +460,25 @@ fun AiPanelDialog(
                 vm.setRefineInstruction(instruction)
                 vm.refine(instruction)
             },
+        )
+    }
+
+    if (showHistory) {
+        HistoryDialog(
+            entries = history,
+            limit = historyLimit,
+            onLoad = { entry ->
+                showHistory = false
+                vm.loadHistory(entry)
+                coroutine.launch { snackbarHost.showSnackbar("已载入历史结果") }
+            },
+            onDelete = vm::deleteHistory,
+            onClear = vm::clearHistory,
+            onOpenSettings = {
+                showHistory = false
+                onOpenSettings()
+            },
+            onDismiss = { showHistory = false },
         )
     }
 

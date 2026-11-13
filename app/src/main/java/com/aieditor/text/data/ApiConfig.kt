@@ -161,6 +161,14 @@ class AppPrefs(context: Context) {
             sp.edit().putInt(KEY_CHUNK_LIMIT, value).apply()
         }
 
+    /** 生成结果历史保留条数；0 表示不保存。 */
+    var historyLimit: Int
+        get() = sp.getInt(KEY_HISTORY_LIMIT, DEFAULT_HISTORY_LIMIT)
+            .coerceIn(0, MAX_HISTORY_LIMIT)
+        set(value) {
+            sp.edit().putInt(KEY_HISTORY_LIMIT, value.coerceIn(0, MAX_HISTORY_LIMIT)).apply()
+        }
+
     // ------------------------------------------------------------ 备份
 
     fun loadBackupSettings(): BackupSettings = BackupSettings(
@@ -189,6 +197,8 @@ class AppPrefs(context: Context) {
     }
 
     private companion object {
+        const val DEFAULT_HISTORY_LIMIT = 3
+        const val MAX_HISTORY_LIMIT = 20
         const val KEY_BASE_URL = "base_url"
         const val KEY_API_KEY = "api_key"
         const val KEY_KEYS_MIGRATED = "api_keys_migrated"
@@ -200,6 +210,7 @@ class AppPrefs(context: Context) {
         const val KEY_DRAFT = "draft"
         const val KEY_CHUNKED = "chunked"
         const val KEY_CHUNK_LIMIT = "chunk_limit"
+        const val KEY_HISTORY_LIMIT = "history_limit"
         const val KEY_BACKUP_URL = "backup_url"
         const val KEY_BACKUP_USER = "backup_user"
         const val KEY_BACKUP_PASS = "backup_pass"

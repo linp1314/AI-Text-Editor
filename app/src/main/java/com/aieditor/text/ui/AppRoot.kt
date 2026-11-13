@@ -73,6 +73,7 @@ fun AppRoot(sharedText: String? = null, vm: AppViewModel = viewModel()) {
     val ai by vm.ai.collectAsState()
     val config by vm.config.collectAsState()
     val backup by vm.backup.collectAsState()
+    val historyLimit by vm.historyLimit.collectAsState()
 
     val snackbarHost = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -286,6 +287,8 @@ fun AppRoot(sharedText: String? = null, vm: AppViewModel = viewModel()) {
                 onOpenAbout = { showAbout = true },
                 lookupKey = { url -> vm.apiKeyFor(url) },
                 onFetchModels = { candidate -> vm.listModels(candidate) },
+                historyLimit = historyLimit,
+                onHistoryLimitChange = vm::setHistoryLimit,
             )
         }
     }

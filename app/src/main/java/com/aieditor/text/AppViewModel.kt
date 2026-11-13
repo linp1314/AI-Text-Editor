@@ -14,10 +14,13 @@ import com.aieditor.text.data.BackupManager
 import com.aieditor.text.data.BackupSettings
 import com.aieditor.text.data.ChatMessage
 import com.aieditor.text.data.DocumentImporter
+import com.aieditor.text.data.HistoryEntry
 import com.aieditor.text.data.RemoteFile
 import com.aieditor.text.data.RestoreMode
+import com.aieditor.text.data.ResultHistoryStore
 import com.aieditor.text.data.TextChunker
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,6 +30,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -93,6 +97,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _backup = MutableStateFlow(prefs.loadBackupSettings())
     val backup: StateFlow<BackupSettings> = _backup.asStateFlow()
+
+    private val historyStore = ResultHistoryStore(File(app.filesDir, "ai_history"))
+
+    private val _history = MutableStateFlow(historyStore.list())
+    val history: StateFlow<List<HistoryEntry>> = _history.asStateFlow()
+
+    private val _historyLimit = MutableStateFlow(prefs.historyLimit)
+    val historyLimit: StateFlow<Int> = _historyLimit.asStateFlow()
 
     private var job: Job? = null
     private var undoSnapshot: TextFieldValue? = null
@@ -423,6 +435,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         chunkProgress = total,
                     )
                 }
+                recordHistory(instruction, result, _ai.value.revision)
             } catch (e: CancellationException) {
                 val partial = collectPartial(chunks, finished, currentIndex, buffer.toString())
                 _ai.update {
@@ -578,6 +591,68 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             while (end < text.length && text[end] != '\n') end++
         }
         return start..(end - 1).coerceAtLeast(start)
+    }
+
+    // ------------------------------------------------------------ 结果历史
+
+    /** 把一次生成结果存到本地；条数为 0（功能关闭）时不保存。 */
+    private fun recordHistory(instruction: String, text: String, revision: Int) {
+        val limit = prefs.historyLimit
+        if (limit <= 0 || text.isBlank()) return
+        val now = System.currentTimeMillis()
+        val entry = HistoryEntry(
+            id = System.nanoTime(),
+            createdAt = now,
+            instruction = instruction,
+            model = _config.value.model,
+            revision = revision,
+            text = text,
+        )
+        // 结果可能很长，读写放 IO 线程，避免生成完成时界面卡一下
+        viewModelScope.launch(Dispatchers.IO) {
+            historyStore.add(entry, limit)
+            _history.value = historyStore.list()
+        }
+    }
+
+    /** 把历史结果载入预览区，可继续二次编辑或直接应用。 */
+    fun loadHistory(entry: HistoryEntry) {
+        pendingRange = null
+        _ai.update {
+            it.copy(
+                output = entry.text,
+                // 载入的内容当作原文，改动对比自然为空
+                sourceText = entry.text,
+                versions = emptyList(),
+                status = "已载入历史结果（${entry.text.length} 字），可继续修改或应用。",
+                isError = false,
+            )
+        }
+    }
+
+    fun deleteHistory(id: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            historyStore.delete(id)
+            _history.value = historyStore.list()
+        }
+    }
+
+    fun clearHistory() {
+        viewModelScope.launch(Dispatchers.IO) {
+            historyStore.clear()
+            _history.value = emptyList()
+        }
+    }
+
+    /** 调整保留条数：0 表示关闭，同时立即裁剪超出部分。 */
+    fun setHistoryLimit(limit: Int) {
+        val safe = limit.coerceIn(0, 20)
+        prefs.historyLimit = safe
+        _historyLimit.value = safe
+        viewModelScope.launch(Dispatchers.IO) {
+            if (safe == 0) historyStore.clear() else historyStore.trim(safe)
+            _history.value = historyStore.list()
+        }
     }
 
     // ------------------------------------------------------------ 结果处理
