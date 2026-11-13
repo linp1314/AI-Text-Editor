@@ -15,6 +15,7 @@ import com.aieditor.text.data.BackupSettings
 import com.aieditor.text.data.ChatMessage
 import com.aieditor.text.data.DocumentImporter
 import com.aieditor.text.data.HistoryEntry
+import com.aieditor.text.data.PromptBuilder
 import com.aieditor.text.data.RemoteFile
 import com.aieditor.text.data.RestoreMode
 import com.aieditor.text.data.ResultHistoryStore
@@ -66,6 +67,8 @@ data class AiState(
     val chunkCount: Int = 0,
     /** 已完成/正在处理的段序号（从 1 开始）。 */
     val chunkProgress: Int = 0,
+    /** 本次是「无原文、从零生成」。 */
+    val generating: Boolean = false,
 ) {
     /** 当前结果属于第几版：首轮结果为第 1 版，每次二次编辑 +1。 */
     val revision: Int get() = versions.size + 1
@@ -261,7 +264,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         return TextChunker.count(text, state.chunkLimit)
     }
 
-    /** 首轮：处理编辑区里的目标文本。 */
+    /** 首轮：处理编辑区里的目标文本；编辑区为空时改为按指令从零生成。 */
     fun send() {
         val state = _ai.value
         if (state.running) return
@@ -272,7 +275,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
         val target = targetText(state.scope)
         if (target == null) {
-            notify("编辑区还没有内容")
+            // 没有原文：把指令当成创作要求，生成的内容可以一键写入空白编辑区
+            pendingRange = null
+            startEdit(
+                instruction = instruction,
+                context = "",
+                sourceText = "",
+                isRefine = false,
+                pushVersion = null,
+                clearRefineInput = false,
+                isGenerate = true,
+            )
             return
         }
         val (context, range) = target
@@ -284,6 +297,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             isRefine = false,
             pushVersion = null,
             clearRefineInput = false,
+            isGenerate = false,
         )
     }
 
@@ -335,12 +349,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         isRefine: Boolean,
         pushVersion: String?,
         clearRefineInput: Boolean,
+        isGenerate: Boolean = false,
     ) {
         val state = _ai.value
-        val chunks = if (state.chunked) {
-            TextChunker.split(context, state.chunkLimit)
-        } else {
-            listOf(TextChunker.Chunk(context, ""))
+        // 生成模式没有原文，不切段
+        val chunks = when {
+            isGenerate -> listOf(TextChunker.Chunk("", ""))
+            state.chunked -> TextChunker.split(context, state.chunkLimit)
+            else -> listOf(TextChunker.Chunk(context, ""))
         }
         val total = chunks.size
 
@@ -350,6 +366,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 output = "",
                 status = when {
                     isRefine -> "正在按新指令修改结果…"
+                    isGenerate -> "正在按你的要求生成内容…"
                     total > 1 -> "文本较长，已切分为 $total 段，开始处理第 1 段…"
                     else -> "正在生成…"
                 },
@@ -357,6 +374,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 chunkCount = total,
                 chunkProgress = if (total > 1) 1 else 0,
                 sourceText = sourceText,
+                generating = isGenerate,
                 // 首轮重新开始时清空版本栈；二次编辑把当前结果压栈以便回退
                 versions = when {
                     pushVersion != null -> it.versions + pushVersion
@@ -380,6 +398,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         instruction = instruction,
                         context = chunk.text,
                         isRefine = isRefine,
+                        isGenerate = isGenerate,
                         segmentIndex = index,
                         segmentTotal = total,
                     )
@@ -523,29 +542,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         instruction: String,
         context: String,
         isRefine: Boolean,
+        isGenerate: Boolean = false,
         segmentIndex: Int = 0,
         segmentTotal: Int = 1,
     ): List<ChatMessage> {
         val system = _config.value.systemPrompt
-        val user = buildString {
-            append("【任务】\n").append(instruction).append("\n\n")
-            if (isRefine) {
-                append("【说明】\n下面这段文本是上一轮 AI 编辑后的结果，请直接在它的基础上按本次任务继续修改，")
-                append("保留没有被要求改动的部分。\n\n")
-            }
-            if (segmentTotal > 1) {
-                append("【分段说明】\n")
-                append("原文较长，已分成 ").append(segmentTotal).append(" 段依次处理，本段是第 ")
-                append(segmentIndex + 1).append(" 段（共 ").append(segmentTotal).append(" 段）。\n")
-                append("请只处理本段内容并直接输出结果：不要输出“第 x 段”“以下为处理结果”等任何说明文字，")
-                append("不要补写原文中不存在的内容，也不要重复本段之外的文字。\n\n")
-            }
-            append("【原文】\n").append(context)
+        return if (isGenerate) {
+            PromptBuilder.generate(system, instruction)
+        } else {
+            PromptBuilder.edit(system, instruction, context, isRefine, segmentIndex, segmentTotal)
         }
-        return listOf(
-            ChatMessage("system", system),
-            ChatMessage("user", user),
-        )
     }
 
     /** 返回（要处理的文本, 在原文中的范围；null 表示整篇）。 */
@@ -665,7 +671,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val range = pendingRange
         undoSnapshot = value
         val (newText, cursor) = if (range == null) {
-            output to output.length
+            // 生成模式下若用户在生成期间已经往编辑区写了内容，追加而不是覆盖
+            val existing = value.text
+            if (_ai.value.generating && existing.isNotBlank()) {
+                val sep = if (existing.endsWith("\n")) "\n" else "\n\n"
+                val merged = existing + sep + output
+                merged to merged.length
+            } else {
+                output to output.length
+            }
         } else {
             val start = range.first.coerceIn(0, value.text.length)
             val end = (range.last + 1).coerceIn(start, value.text.length)

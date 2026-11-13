@@ -3,6 +3,7 @@ package com.aieditor.text.ui
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -72,6 +73,8 @@ fun AiPanelDialog(
     val displayText = state.output
     // 当前范围若开启分段，预计会切成几段
     val editorState by vm.editor.collectAsState()
+    // 编辑区为空：进入「从零生成」模式，指令即创作要求
+    val emptyDoc = editorState.text.isBlank()
     val chunkCount = remember(editorState.text, state.scope, state.chunked, state.chunkLimit) {
         vm.estimateChunks()
     }
@@ -163,7 +166,11 @@ fun AiPanelDialog(
                             modifier = Modifier.fillMaxWidth(),
                             placeholder = {
                                 Text(
-                                    "让 AI 做什么？例如：给这段代码加注释 / 翻译成英文",
+                                    if (emptyDoc) {
+                                        "想生成什么？例如：写一封婉拒加班的邮件，200 字左右，语气客气"
+                                    } else {
+                                        "让 AI 做什么？例如：给这段代码加注释 / 翻译成英文"
+                                    },
                                     fontSize = 14.sp,
                                     color = MaterialTheme.colorScheme.outline,
                                 )
@@ -186,7 +193,12 @@ fun AiPanelDialog(
                                 .horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            listOf("润色", "精简", "纠错", "翻译成英文", "加注释", "扩写", "改正式语气").forEach { label ->
+                            val chips = if (emptyDoc) {
+                                listOf("写一段自我介绍", "写一封工作邮件", "写一篇短文", "列一份清单", "写产品文案", "翻译成英文")
+                            } else {
+                                listOf("润色", "精简", "纠错", "翻译成英文", "加注释", "扩写", "改正式语气")
+                            }
+                            chips.forEach { label ->
                                 AssistChip(
                                     onClick = { vm.setInstruction(label) },
                                     label = { Text(label, fontSize = 12.sp) },
@@ -201,11 +213,39 @@ fun AiPanelDialog(
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            ScopeSelector(
-                                scope = state.scope,
-                                onSelect = vm::setScope,
-                                modifier = Modifier.weight(1f),
-                            )
+                            if (emptyDoc) {
+                                Surface(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(52.dp),
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = BrandGreen.copy(alpha = 0.10f),
+                                    border = BorderStroke(1.dp, BrandGreen.copy(alpha = 0.35f)),
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(horizontal = 12.dp),
+                                        verticalArrangement = Arrangement.Center,
+                                    ) {
+                                        Text(
+                                            "从零生成",
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = BrandGreen,
+                                        )
+                                        Text(
+                                            "编辑区为空，写清要求即可生成",
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                            } else {
+                                ScopeSelector(
+                                    scope = state.scope,
+                                    onSelect = vm::setScope,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
                             Button(
                                 onClick = { vm.send() },
                                 enabled = !state.running && state.instruction.isNotBlank(),
@@ -218,7 +258,11 @@ fun AiPanelDialog(
                                     contentColor = Color.White,
                                 ),
                             ) {
-                                Text("发送", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    if (emptyDoc) "生成" else "发送",
+                                    fontSize = 17.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
                             }
                         }
 
@@ -256,40 +300,42 @@ fun AiPanelDialog(
                             ) { Text("配置", fontSize = 13.sp) }
                         }
 
-                        // 长文分段控制
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            AssistChip(
-                                onClick = { vm.setChunked(!state.chunked) },
-                                label = {
-                                    Text(
-                                        if (state.chunked) "长文分段 · 开" else "长文分段 · 关",
-                                        fontSize = 12.sp,
-                                    )
-                                },
-                                shape = RoundedCornerShape(16.dp),
-                                colors = AssistChipDefaults.assistChipColors(
-                                    containerColor = if (state.chunked) BrandGreen.copy(alpha = 0.14f) else Color.Transparent,
-                                    labelColor = if (state.chunked) BrandGreen else MaterialTheme.colorScheme.onSurfaceVariant,
-                                ),
-                            )
-                            if (state.chunked) {
-                                ChunkLimitPicker(
-                                    limit = state.chunkLimit,
-                                    onSelect = vm::setChunkLimit,
-                                )
-                                Spacer(Modifier.weight(1f))
-                                Text(
-                                    text = when {
-                                        chunkCount > 1 -> "将分 $chunkCount 段"
-                                        chunkCount == 1 -> "单段发送"
-                                        else -> ""
+                        // 长文分段控制（生成模式没有原文，不需要分段）
+                        if (!emptyDoc) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                AssistChip(
+                                    onClick = { vm.setChunked(!state.chunked) },
+                                    label = {
+                                        Text(
+                                            if (state.chunked) "长文分段 · 开" else "长文分段 · 关",
+                                            fontSize = 12.sp,
+                                        )
                                     },
-                                    fontSize = 11.sp,
-                                    color = if (chunkCount > 1) BrandGreen else MaterialTheme.colorScheme.outline,
+                                    shape = RoundedCornerShape(16.dp),
+                                    colors = AssistChipDefaults.assistChipColors(
+                                        containerColor = if (state.chunked) BrandGreen.copy(alpha = 0.14f) else Color.Transparent,
+                                        labelColor = if (state.chunked) BrandGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    ),
                                 )
+                                if (state.chunked) {
+                                    ChunkLimitPicker(
+                                        limit = state.chunkLimit,
+                                        onSelect = vm::setChunkLimit,
+                                    )
+                                    Spacer(Modifier.weight(1f))
+                                    Text(
+                                        text = when {
+                                            chunkCount > 1 -> "将分 $chunkCount 段"
+                                            chunkCount == 1 -> "单段发送"
+                                            else -> ""
+                                        },
+                                        fontSize = 11.sp,
+                                        color = if (chunkCount > 1) BrandGreen else MaterialTheme.colorScheme.outline,
+                                    )
+                                }
                             }
                         }
 
@@ -337,7 +383,11 @@ fun AiPanelDialog(
                         ) {
                             if (displayText.isEmpty()) {
                                 Text(
-                                    text = if (state.running) "等待模型返回…" else "AI 结果会显示在这里，可长按选择、复制或直接应用到编辑区。",
+                                    text = when {
+                                        state.running -> "等待模型返回…"
+                                        emptyDoc -> "写好要求后点「生成」，结果会出现在这里，可直接写入编辑区。"
+                                        else -> "AI 结果会显示在这里，可长按选择、复制或直接应用到编辑区。"
+                                    },
                                     fontSize = 13.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                                 )
@@ -429,7 +479,7 @@ fun AiPanelDialog(
                             ) { showExport = true }
                             PanelAction(text = "关闭", modifier = Modifier.weight(1f), onClick = onClose)
                             PanelAction(
-                                text = "应用",
+                                text = if (emptyDoc) "写入" else "应用",
                                 enable = displayText.isNotBlank() && !state.running,
                                 highlight = true,
                                 modifier = Modifier.weight(1f),

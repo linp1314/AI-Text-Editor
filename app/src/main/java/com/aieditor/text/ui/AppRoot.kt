@@ -180,7 +180,7 @@ fun AppRoot(sharedText: String? = null, vm: AppViewModel = viewModel()) {
                     Spacer(Modifier.weight(1f))
                     Button(
                         onClick = { showPanel = true },
-                        enabled = text.isNotBlank() || ai.output.isNotBlank(),
+                        // 空白文档也能打开：面板会自动进入「从零生成」模式
                         modifier = Modifier.height(46.dp),
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = BrandGreen),
@@ -235,7 +235,9 @@ fun AppRoot(sharedText: String? = null, vm: AppViewModel = viewModel()) {
                     Box(Modifier.fillMaxSize()) {
                         if (text.isEmpty()) {
                             Text(
-                                "在这里输入或粘贴需要编辑的文本…\n\n写好后点右下角「AI 编辑」，用一句话告诉 AI 你要改什么。",
+                                "在这里输入或粘贴需要编辑的文本…\n\n" +
+                                    "写好后点右下角「AI 编辑」，用一句话告诉 AI 你要改什么。\n" +
+                                    "也可以什么都不写，直接在 AI 面板里描述要求，让它从零生成内容。",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
                                 fontSize = 15.sp,
                                 lineHeight = 24.sp,
