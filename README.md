@@ -258,6 +258,10 @@ git remote set-url origin https://oauth2:<PAT>@github.com/linp1314/AI-Text-Edito
 | `ANDROID_KEY_ALIAS` | 密钥别名 |
 | `ANDROID_KEY_PASSWORD` | 密钥口令 |
 
-不配置这些 Secret 也能跑通，只是产物为 debug 签名，不能覆盖安装已发布的版本。
+不配置这些 Secret 也能跑通，只是产物为 debug 签名，不能覆盖安装已发布的版本（这种情况下附件名会自动带上 `-debug-signed` 后缀，避免和正式包混淆）。
 
-工作流也支持手动触发（Actions → Release → Run workflow），但版本号仍以仓库里的 `versionName` 为准。
+工作流也支持手动触发（Actions → Release → Run workflow），版本号仍以仓库里的 `versionName` 为准；手动触发的 Release 会是**草稿**状态，确认没问题再点 Publish，不会覆盖已有的正式版本。
+
+流水线做的事：跑单元测试 → 构建 release APK → `zipalign -c -P 16` 校验 16KB 对齐 → 生成 `SHA256SUMS.txt` → 连同 APK 一起挂到 Release（附件名统一用 ASCII，中文名会被 GitHub 清洗）。
+
+> 用 fine-grained PAT 通过 API 改仓库时，除了 Contents 的读写权限，还需要 **Workflows: Read and write** 才能提交 `.github/workflows/` 下的文件；配 Secrets 需要 **Secrets: Read and write**。缺权限时接口返回 `403 Resource not accessible by personal access token`。
