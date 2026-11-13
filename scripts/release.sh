@@ -128,11 +128,22 @@ else
 fi
 
 # ---------- 发布到 GitHub Releases ----------
-# 用 ASCII 文件名上传，中文名会被 GitHub 截断成 "AI.-v1.5.2.apk"
+# 仓库里有 CI 工作流时，tag 推送后由 Actions 构建并发布，本地不再重复上传，
+# 避免两边抢同一个 Release。想强制本地发布：FORCE_LOCAL_RELEASE=1 ./scripts/release.sh ...
 UPLOAD="$ROOT/../AI-Text-Editor-v$VERSION.apk"
 cp "$APK" "$UPLOAD"
 
 REPO_SLUG="$(git remote get-url origin | sed -E 's#.*github\.com[:/]##; s#\.git$##')"
+BASE_URL="https://github.com/$REPO_SLUG"
+
+if [ -f "$ROOT/.github/workflows/release.yml" ] && [ "${FORCE_LOCAL_RELEASE:-0}" != "1" ]; then
+    echo
+    echo "检测到 CI 工作流，已交给 GitHub Actions 构建并发布。"
+    echo "  查看进度： $BASE_URL/actions"
+    echo "  发布页：   $BASE_URL/releases/tag/v$VERSION（CI 完成后出现）"
+    echo "APK 本地备份：$UPLOAD"
+    exit 0
+fi
 
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
     echo "== 创建 GitHub Release =="
@@ -141,7 +152,7 @@ if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
         --repo "$REPO_SLUG" \
         --title "v$VERSION" \
         --notes "$NOTES_MD" 2>/dev/null; then
-        echo "已发布：https://github.com/$REPO_SLUG/releases/tag/v$VERSION"
+        echo "已发布：$BASE_URL/releases/tag/v$VERSION"
     else
         echo "Release 创建失败（可能已存在），APK 保留在：$UPLOAD"
     fi
@@ -149,5 +160,5 @@ else
     echo
     echo "未检测到已登录的 gh CLI，APK 未上传到 Releases。"
     echo "安装并登录后可自动发布： brew/apt install gh && gh auth login"
-    echo "或手动上传： https://github.com/$REPO_SLUG/releases/new?tag=v$VERSION"
+    echo "或手动上传： $BASE_URL/releases/new?tag=v$VERSION"
 fi
