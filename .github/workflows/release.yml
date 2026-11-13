@@ -88,11 +88,13 @@ jobs:
         run: sha256sum "$APK_NAME" | tee SHA256SUMS.txt
 
       - name: 发布到 GitHub Release
+        # 没有正式签名的包不发布，避免给已发布的 Release 混进 debug 签名附件
+        if: env.SIGNED == 'yes' || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.VERSION }}
           name: v${{ env.VERSION }}
-          draft: ${{ github.event_name == 'workflow_dispatch' }}
+          draft: ${{ env.SIGNED != 'yes' }}
           files: |
             ${{ env.APK_NAME }}
             SHA256SUMS.txt
