@@ -244,6 +244,13 @@ fun BackupDialog(
 
                     Spacer(Modifier.height(10.dp))
                     Text(
+                        "备份文件是明文 JSON，含接口地址、API Key 与当前文档。请只放到自己可信的 WebDAV 目录，不要上传到公开网盘。",
+                        fontSize = 11.sp,
+                        lineHeight = 16.sp,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Text(
                         lastStatus,
                         fontSize = 12.sp,
                         lineHeight = 18.sp,

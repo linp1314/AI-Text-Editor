@@ -74,24 +74,67 @@ block = f'''    val releases = listOf(
             )
         ),'''
 c = c.replace("    val releases = listOf(", block, 1)
+
+# 只保留最近 MAX_RELEASES 个版本（与 Changelog.MAX_RELEASES 保持一致）
+MAX_RELEASES = 5
+head, rest = c.split("    val releases = listOf(", 1)
+m_end = re.search(r"\n    \)", rest)
+if m_end:
+    body, tail = rest[:m_end.start()], rest[m_end.start():]
+    chunks = body.split("\n        Release(")
+    blocks = ["\n        Release(" + x for x in chunks[1:]]
+    if len(blocks) > MAX_RELEASES:
+        c = head + "    val releases = listOf(" + "".join(blocks[:MAX_RELEASES]) + tail
+        print(f"更新记录已裁剪为最近 {MAX_RELEASES} 个版本")
 open(changelog, "w", encoding="utf-8").write(c)
+
+# README 顶部的当前版本号同步更新
+readme = "README.md"
+if os.path.exists(readme):
+    r = open(readme, encoding="utf-8").read()
+    r2 = re.sub(r"当前版本 \*\*[0-9.]+\*\*", f"当前版本 **{version}**", r, count=1)
+    if r2 != r:
+        open(readme, "w", encoding="utf-8").write(r2)
 
 print(f"versionCode → {code}，versionName → {version}")
 print(f"更新记录 {len(notes)} 条，日期 {today}")
 PY
 
 # ---------- 测试与构建 ----------
-export JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk-amd64}"
-export ANDROID_HOME="${ANDROID_HOME:-/opt/android-sdk}"
+# JDK / SDK 路径按环境自动探测，不写死个人机器的目录
+if [ -z "${JAVA_HOME:-}" ] && [ -x /usr/libexec/java_home ]; then
+    JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || true)"
+fi
+if [ -z "${JAVA_HOME:-}" ]; then
+    _java="$(command -v java || true)"
+    [ -n "$_java" ] && JAVA_HOME="$(cd "$(dirname "$_java")/.." && pwd -P)"
+fi
+export JAVA_HOME
+export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}}"
 
-GRADLE_BIN="gradle"
-[ -x "/opt/gradle-8.7/bin/gradle" ] && GRADLE_BIN="/opt/gradle-8.7/bin/gradle"
+GRADLE_ARGS=""
+if [ -x "$ROOT/gradlew" ] && [ "${OFFLINE:-0}" != "1" ]; then
+    GRADLE_BIN="$ROOT/gradlew"
+    chmod +x "$GRADLE_BIN" 2>/dev/null || true
+elif [ -x /opt/gradle-8.7/bin/gradle ] && [ "${OFFLINE:-0}" = "1" ]; then
+    GRADLE_BIN=/opt/gradle-8.7/bin/gradle
+    GRADLE_ARGS="--offline"
+elif command -v gradle >/dev/null 2>&1; then
+    GRADLE_BIN="gradle"
+    [ "${OFFLINE:-0}" = "1" ] && GRADLE_ARGS="--offline"
+elif [ -x "$ROOT/gradlew" ]; then
+    GRADLE_BIN="$ROOT/gradlew"
+    chmod +x "$GRADLE_BIN" 2>/dev/null || true
+else
+    echo "找不到 gradlew，也没有安装 gradle" >&2
+    exit 1
+fi
 
 echo "== 运行单元测试 =="
-"$GRADLE_BIN" :app:testDebugUnitTest --offline -q
+"$GRADLE_BIN" :app:testDebugUnitTest $GRADLE_ARGS -q
 
 echo "== 构建 release 包 =="
-"$GRADLE_BIN" :app:assembleRelease --offline -q
+"$GRADLE_BIN" :app:assembleRelease $GRADLE_ARGS -q
 
 APK="app/build/outputs/apk/release/app-release.apk"
 [ -f "$APK" ] || { echo "构建产物不存在：$APK"; exit 1; }
