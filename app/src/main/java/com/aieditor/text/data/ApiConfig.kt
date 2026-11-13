@@ -147,6 +147,13 @@ class AppPrefs(context: Context) {
             sp.edit().putString(KEY_DRAFT, value).apply()
         }
 
+    /** 上次停留在哪篇文档，重启后回到原处。 */
+    var activeDocId: Long
+        get() = sp.getLong(KEY_ACTIVE_DOC, 0L)
+        set(value) {
+            sp.edit().putLong(KEY_ACTIVE_DOC, value).apply()
+        }
+
     /** 长文分段开关，默认开启（短文本会自动按单段处理）。 */
     var chunked: Boolean
         get() = sp.getBoolean(KEY_CHUNKED, true)
@@ -208,6 +215,7 @@ class AppPrefs(context: Context) {
         const val KEY_SYSTEM = "system_prompt"
         const val KEY_STREAM = "stream"
         const val KEY_DRAFT = "draft"
+        const val KEY_ACTIVE_DOC = "active_doc"
         const val KEY_CHUNKED = "chunked"
         const val KEY_CHUNK_LIMIT = "chunk_limit"
         const val KEY_HISTORY_LIMIT = "history_limit"

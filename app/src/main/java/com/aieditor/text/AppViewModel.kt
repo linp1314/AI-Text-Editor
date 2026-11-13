@@ -163,8 +163,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             listOf(Doc(id = newId(), title = "未命名", subtitle = "未命名文档", text = prefs.draft))
         }
         _docs.value = docs
-        _activeDocId.value = docs.first().id
-        openDoc(docs.first().id)
+        // 回到上次停留的那篇，找不到就打开第一篇
+        val remembered = prefs.activeDocId
+        val active = docs.firstOrNull { it.id == remembered } ?: docs.first()
+        _activeDocId.value = active.id
+        openDoc(active.id)
     }
 
     // ------------------------------------------------------------ 文档列表
@@ -210,14 +213,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             burstActive = false
         }
         _activeDocId.value = id
+        prefs.activeDocId = id
         openDoc(id)
     }
 
     /** 新建空白文档，排在列表最前面并立即切换过去。 */
-    fun newDoc(title: String = untitledTitle(), text: String = "") {
-        val doc = Doc(id = newId(), title = title, subtitle = "未命名文档", text = text)
+    fun newDoc(
+        title: String = untitledTitle(),
+        text: String = "",
+        subtitle: String = "未命名文档",
+    ) {
+        val doc = Doc(id = newId(), title = title, subtitle = subtitle, text = text)
         _docs.update { listOf(doc) + it }
         _activeDocId.value = doc.id
+        prefs.activeDocId = doc.id
         openDoc(doc.id)
         scheduleSave()
     }
@@ -236,12 +245,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val blank = Doc(id = newId(), title = untitledTitle(), subtitle = "未命名文档")
             _docs.value = listOf(blank)
             _activeDocId.value = blank.id
+            prefs.activeDocId = blank.id
             openDoc(blank.id)
         } else {
             _docs.value = rest
             if (_activeDocId.value == id) {
                 val next = rest[minOf(index, rest.lastIndex)]
                 _activeDocId.value = next.id
+                prefs.activeDocId = next.id
                 openDoc(next.id)
             }
         }
@@ -258,6 +269,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val placeholder = list.size == 1 && list.first().text.isBlank() && list.first().uri == null
         _docs.value = if (placeholder) listOf(doc) else listOf(doc) + list
         _activeDocId.value = doc.id
+        prefs.activeDocId = doc.id
         openDoc(doc.id)
         scheduleSave()
     }
@@ -329,6 +341,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             )
             _docs.update { listOf(doc) + it }
             _activeDocId.value = doc.id
+            prefs.activeDocId = doc.id
             openDoc(doc.id)
             scheduleSave()
             val hint = if (prefs.chunked && document.text.length > prefs.chunkLimit) "，发送时会自动分段" else ""
@@ -995,7 +1008,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // 结果属于另一篇文档时先切过去，再写入；否则会改错文件
         val targetId = state.docId
         if (targetId != null && targetId != _activeDocId.value) {
-            if (_docs.value.none { it.id == targetId }) return false
+            if (_docs.value.none { it.id == targetId }) {
+                notify("这篇文档已经关闭，结果仍保留在历史里")
+                return false
+            }
             switchDoc(targetId)
             pendingRange = range
         }

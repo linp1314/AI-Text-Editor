@@ -148,7 +148,7 @@ fun AppRoot(sharedText: String? = null, vm: AppViewModel = viewModel()) {
 
     LaunchedEffect(sharedText) {
         if (!sharedText.isNullOrBlank()) {
-            vm.newDoc(title = "分享的文本", text = sharedText)
+            vm.newDoc(title = "分享的文本", text = sharedText, subtitle = "来自其他应用的分享")
             openPanel()
         }
     }
