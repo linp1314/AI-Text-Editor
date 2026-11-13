@@ -126,3 +126,28 @@ else
     echo "配好凭证后执行： git push origin main --tags"
     exit 1
 fi
+
+# ---------- 发布到 GitHub Releases ----------
+# 用 ASCII 文件名上传，中文名会被 GitHub 截断成 "AI.-v1.5.2.apk"
+UPLOAD="$ROOT/../AI-Text-Editor-v$VERSION.apk"
+cp "$APK" "$UPLOAD"
+
+REPO_SLUG="$(git remote get-url origin | sed -E 's#.*github\.com[:/]##; s#\.git$##')"
+
+if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    echo "== 创建 GitHub Release =="
+    NOTES_MD="$(printf '%s' "${NOTES_RAW:-常规更新与问题修复}" | tr '|' '\n' | sed 's/^/- /')"
+    if gh release create "v$VERSION" "$UPLOAD" \
+        --repo "$REPO_SLUG" \
+        --title "v$VERSION" \
+        --notes "$NOTES_MD" 2>/dev/null; then
+        echo "已发布：https://github.com/$REPO_SLUG/releases/tag/v$VERSION"
+    else
+        echo "Release 创建失败（可能已存在），APK 保留在：$UPLOAD"
+    fi
+else
+    echo
+    echo "未检测到已登录的 gh CLI，APK 未上传到 Releases。"
+    echo "安装并登录后可自动发布： brew/apt install gh && gh auth login"
+    echo "或手动上传： https://github.com/$REPO_SLUG/releases/new?tag=v$VERSION"
+fi

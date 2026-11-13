@@ -240,12 +240,13 @@ git remote set-url origin https://oauth2:<PAT>@github.com/linp1314/AI-Text-Edito
 3. 跑单元测试 → 构建 release 包 → 校验签名指纹
 4. 导出 `../AI文本编辑-v1.5.3.apk`
 5. `git commit` → 打 tag `v1.5.3` → `git push origin main --tags`
+6. 若本机装了已登录的 `gh` CLI，自动创建 Release 并上传 APK（用 ASCII 文件名 `AI-Text-Editor-v1.5.3.apk`，中文名会被 GitHub 截断）
 
-推送失败时提交和 tag 会留在本地，配好凭证后补一条 `git push origin main --tags` 即可。
+推送失败时提交和 tag 会留在本地，配好凭证后补一条 `git push origin main --tags` 即可。没装 `gh` 时会给出网页上传链接。
 
 > 脚本拒绝在脏工作区或非 `main` 分支上发版，避免把半成品带进 tag。
 
-### 6.3 打 tag 自动构建并发布 APK
+### 6.3 可选：CI 自动构建并发布 APK
 
 `.github/workflows/release.yml` 会在推送 `v*` tag 时自动跑测试、构建 APK 并挂到 GitHub Releases。要在 CI 里产出**与本地同一签名**的包，需在仓库 Settings → Secrets and variables → Actions 添加：
 
