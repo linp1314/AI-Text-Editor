@@ -95,7 +95,7 @@ fun AboutDialog(onDismiss: () -> Unit) {
                     Spacer(Modifier.height(14.dp))
                     Text(
                         "一个轻量的文本编辑器：接入任意 OpenAI 兼容接口，用一句话完成润色、改写、翻译、校对；" +
-                            "支持导入手机文档、长文自动分段、改动对比与二次编辑。",
+                            "支持同时打开多篇文档、导入手机文档、长文自动分段、改动对比与二次编辑。",
                         fontSize = 12.sp,
                         lineHeight = 19.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
