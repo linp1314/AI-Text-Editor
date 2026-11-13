@@ -2,7 +2,6 @@ package com.aieditor.text.ui
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,11 +15,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -32,7 +30,6 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -47,9 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -81,7 +76,7 @@ fun AppRoot(sharedText: String? = null, vm: AppViewModel = viewModel()) {
     var showSettings by remember { mutableStateOf(false) }
     var showBackup by remember { mutableStateOf(false) }
     var showAbout by remember { mutableStateOf(false) }
-    val clipboard = LocalClipboardManager.current
+    var showMenu by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val importing by vm.importing.collectAsState()
 
@@ -127,35 +122,52 @@ fun AppRoot(sharedText: String? = null, vm: AppViewModel = viewModel()) {
             TopAppBar(
                 title = {
                     Column {
-                        Text("AI 文本编辑", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+                        Text("AI 文本编辑", fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
                         Text(
-                            text = if (config.apiKey.isBlank()) "未配置密钥 · 点右上角设置" else "${config.model} · 已连接",
+                            text = if (config.apiKey.isBlank()) {
+                                "未配置密钥 · 右上角菜单里设置"
+                            } else {
+                                "${config.model} · 已连接"
+                            },
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 },
                 actions = {
-                    TextButton(
-                        onClick = { importLauncher.launch(IMPORT_MIME_TYPES) },
-                        enabled = !importing,
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp),
-                    ) {
-                        if (importing) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(14.dp),
-                                strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.primary,
+                    // 清空、设置、备份、关于收进一个菜单，顶栏只留一个入口
+                    Box {
+                        IconButton(onClick = { showMenu = true }) {
+                            Icon(
+                                Icons.Filled.MoreVert,
+                                contentDescription = "更多",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                        } else {
-                            Text("导入", fontSize = 14.sp, color = MaterialTheme.colorScheme.primary)
                         }
-                    }
-                    IconButton(onClick = { vm.clearEditor() }, enabled = text.isNotEmpty()) {
-                        Icon(Icons.Filled.Delete, contentDescription = "清空", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    IconButton(onClick = { showSettings = true }) {
-                        Icon(Icons.Filled.Settings, contentDescription = "配置", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false },
+                            shape = RoundedCornerShape(Ui.radius),
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                            tonalElevation = 3.dp,
+                        ) {
+                            MenuItem("清空文档", enabled = text.isNotEmpty()) {
+                                showMenu = false
+                                vm.clearEditor()
+                            }
+                            MenuItem("接口与模型设置") {
+                                showMenu = false
+                                showSettings = true
+                            }
+                            MenuItem("WebDAV 备份") {
+                                showMenu = false
+                                showBackup = true
+                            }
+                            MenuItem("关于与更新记录") {
+                                showMenu = false
+                                showAbout = true
+                            }
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
@@ -166,27 +178,42 @@ fun AppRoot(sharedText: String? = null, vm: AppViewModel = viewModel()) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 18.dp, vertical = 10.dp),
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Column {
-                        Text("${text.length} 字 · ${text.count { it == '\n' } + if (text.isEmpty()) 0 else 1} 行", fontSize = 12.sp)
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "${text.length} 字 · ${text.count { it == '\n' } + if (text.isEmpty()) 0 else 1} 行",
+                            fontSize = 12.sp,
+                        )
                         Text(
                             text = if (selectedCount > 0) "已选中 $selectedCount 字" else "长按可选文本",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.outline,
                         )
                     }
-                    Spacer(Modifier.weight(1f))
-                    Button(
-                        onClick = { showPanel = true },
-                        // 空白文档也能打开：面板会自动进入「从零生成」模式
-                        modifier = Modifier.height(46.dp),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = BrandGreen),
-                    ) {
-                        Text("AI 编辑", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    OutlineButton(
+                        text = if (importing) "导入中" else "导入",
+                        modifier = Modifier.width(76.dp),
+                        enabled = !importing,
+                        height = 42.dp,
+                    ) { importLauncher.launch(IMPORT_MIME_TYPES) }
+                    if (importing) {
+                        Spacer(Modifier.width(6.dp))
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp,
+                            color = BrandGreen,
+                        )
                     }
+                    Spacer(Modifier.width(8.dp))
+                    PrimaryButton(
+                        text = "AI 编辑",
+                        modifier = Modifier.width(100.dp),
+                        height = 42.dp,
+                        // 空白文档也能打开：面板会自动进入「从零生成」模式
+                        onClick = { showPanel = true },
+                    )
                 }
             }
         },
@@ -197,28 +224,6 @@ fun AppRoot(sharedText: String? = null, vm: AppViewModel = viewModel()) {
                 .fillMaxSize()
                 .padding(horizontal = 18.dp),
         ) {
-            if (text.isEmpty()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("空白文档", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
-                    Spacer(Modifier.weight(1f))
-                    TextButton(
-                        onClick = {
-                            val clipboardText = clipboard.getText()?.text
-                            if (!clipboardText.isNullOrBlank()) vm.setEditorText(clipboardText)
-                            else scope.launch { snackbarHost.showSnackbar("剪贴板是空的") }
-                        },
-                        modifier = Modifier.height(32.dp),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
-                    ) {
-                        Text("粘贴剪贴板", fontSize = 12.sp)
-                    }
-                }
-            }
             BasicTextField(
                 value = editor,
                 onValueChange = vm::onEditorChange,
@@ -237,7 +242,7 @@ fun AppRoot(sharedText: String? = null, vm: AppViewModel = viewModel()) {
                             Text(
                                 "在这里输入或粘贴需要编辑的文本…\n\n" +
                                     "写好后点右下角「AI 编辑」，用一句话告诉 AI 你要改什么。\n" +
-                                    "也可以什么都不写，直接在 AI 面板里描述要求，让它从零生成内容。",
+                                    "也可以什么都不写，直接描述要求让它从零生成。",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
                                 fontSize = 15.sp,
                                 lineHeight = 24.sp,
@@ -311,3 +316,17 @@ fun AppRoot(sharedText: String? = null, vm: AppViewModel = viewModel()) {
     }
 }
 
+@Composable
+private fun MenuItem(text: String, enabled: Boolean = true, onClick: () -> Unit) {
+    DropdownMenuItem(
+        text = {
+            Text(
+                text = text,
+                fontSize = 14.sp,
+                color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
+            )
+        },
+        enabled = enabled,
+        onClick = onClick,
+    )
+}

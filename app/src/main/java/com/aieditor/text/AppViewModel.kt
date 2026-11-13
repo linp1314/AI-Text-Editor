@@ -69,6 +69,8 @@ data class AiState(
     val chunkProgress: Int = 0,
     /** 本次是「无原文、从零生成」。 */
     val generating: Boolean = false,
+    /** 结果被手动改过：此时不再展示「改动对比」，避免和 AI 改动混在一起。 */
+    val outputEdited: Boolean = false,
 ) {
     /** 当前结果属于第几版：首轮结果为第 1 版，每次二次编辑 +1。 */
     val revision: Int get() = versions.size + 1
@@ -245,6 +247,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setScope(scope: Scope) = _ai.update { it.copy(scope = scope) }
 
+    /** 在预览区手动修改 AI 结果：修改后的文本同样可应用、可二次 AI 编辑、可保存。 */
+    fun setOutput(text: String) {
+        val state = _ai.value
+        if (state.running || text == state.output) return
+        _ai.update { it.copy(output = text, outputEdited = true) }
+    }
+
     fun setChunked(enabled: Boolean) {
         _ai.update { it.copy(chunked = enabled) }
         prefs.chunked = enabled
@@ -338,6 +347,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 versions = rest,
                 status = "已回到上一版（第 ${rest.size + 1} 版）。",
                 isError = false,
+                outputEdited = false,
             )
         }
     }
@@ -375,6 +385,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 chunkProgress = if (total > 1) 1 else 0,
                 sourceText = sourceText,
                 generating = isGenerate,
+                outputEdited = false,
                 // 首轮重新开始时清空版本栈；二次编辑把当前结果压栈以便回退
                 versions = when {
                     pushVersion != null -> it.versions + pushVersion
@@ -534,6 +545,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 versions = emptyList(),
                 status = "就绪。",
                 isError = false,
+                outputEdited = false,
             )
         }
     }
@@ -632,6 +644,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 versions = emptyList(),
                 status = "已载入历史结果（${entry.text.length} 字），可继续修改或应用。",
                 isError = false,
+                outputEdited = false,
             )
         }
     }

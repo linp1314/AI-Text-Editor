@@ -163,7 +163,8 @@ fun SettingsDialog(
                             } else {
                                 matched?.name == preset.name
                             }
-                            FilterChip(
+                            PillChip(
+                                text = preset.name,
                                 selected = selected,
                                 onClick = {
                                     if (preset.custom) {
@@ -172,8 +173,6 @@ fun SettingsDialog(
                                         applyUrl(preset.baseUrl, newModel = preset.model)
                                     }
                                 },
-                                label = { Text(preset.name, fontSize = 12.sp) },
-                                shape = RoundedCornerShape(16.dp),
                             )
                         }
                     }
@@ -325,7 +324,9 @@ fun SettingsDialog(
 
                     Spacer(Modifier.height(14.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedButton(
+                        OutlineButton(
+                            text = if (testing) "正在测试…" else "测试连接",
+                            enabled = !testing,
                             onClick = {
                                 testing = true
                                 testResult = ""
@@ -334,15 +335,7 @@ fun SettingsDialog(
                                     testing = false
                                 }
                             },
-                            enabled = !testing,
-                            shape = RoundedCornerShape(10.dp),
-                        ) {
-                            if (testing) {
-                                CircularProgressIndicator(Modifier.width(14.dp).height(14.dp), strokeWidth = 2.dp)
-                                Spacer(Modifier.width(8.dp))
-                            }
-                            Text(if (testing) "正在测试…" else "测试连接", fontSize = 13.sp)
-                        }
+                        )
                         Spacer(Modifier.weight(1f))
                         TextButton(onClick = {
                             applyUrl(
@@ -411,9 +404,15 @@ fun SettingsDialog(
                                 .padding(horizontal = 18.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            TextButton(onClick = onDismiss) { Text("取消") }
-                            Spacer(Modifier.weight(1f))
-                            Button(
+                            OutlineButton(
+                                text = "取消",
+                                modifier = Modifier.weight(1f),
+                                onClick = onDismiss,
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            PrimaryButton(
+                                text = "保存",
+                                modifier = Modifier.weight(1.4f),
                                 onClick = {
                                     if (baseUrl.trim().isBlank()) {
                                         saveError = "请先填写接口地址，或点上面任一服务商预设"
@@ -422,12 +421,7 @@ fun SettingsDialog(
                                         onSave(collect(), switcher.snapshot(apiKey))
                                     }
                                 },
-                                shape = RoundedCornerShape(10.dp),
-                                modifier = Modifier.height(46.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = BrandGreen),
-                            ) {
-                                Text("保存", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                            }
+                            )
                         }
                     }
                 }

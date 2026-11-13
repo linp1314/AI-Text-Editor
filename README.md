@@ -2,7 +2,7 @@
 
 轻量的 Android 文本编辑器：接入**任意 OpenAI 兼容接口**，用一句自然语言指令润色、改写、翻译文本；可从手机导入 docx / pdf / txt 等文档，结果直接写回编辑区。
 
-当前版本 **1.7.0** ｜ [下载 APK](https://github.com/linp1314/AI-Text-Editor/releases/latest) ｜ 需要 Android 7.0+（arm64）
+当前版本 **1.8.0** ｜ [下载 APK](https://github.com/linp1314/AI-Text-Editor/releases/latest) ｜ 需要 Android 7.0+（arm64）
 
 ## 功能
 
@@ -11,11 +11,12 @@
 | 编辑区 | 全屏纯文本编辑，字数 / 行数统计，草稿自动保存 |
 | 导入文档 | txt / md / csv / json / 代码 / html / **docx** / **pdf**，走系统文件选择器，不需要存储权限 |
 | 从零生成 | 编辑区为空时自动切到生成模式，写下要求就能直接产出内容，结果「写入」编辑区 |
-| AI 面板 | 一句话指令 + 快捷芯片（润色 / 精简 / 纠错 / 翻译 / 扩写 / 改语气） |
+| AI 面板 | 一句话指令 + 快捷标签（润色 / 精简 / 纠错 / 翻译 / 扩写 / 改语气） |
 | 处理范围 | 整个文件 / 选中文本 / 当前段落 |
 | 长文分段 | 超长文本按段落 → 句子边界切块，逐段处理再按原排版合并；中途停止或某段失败时已完成段保留结果、其余回落原文 |
 | 流式输出 | SSE 增量渲染，随时停止，已生成部分保留 |
-| 二次编辑 | 在结果上继续下指令，多轮迭代，`↺` 一键回退上一版 |
+| 二次编辑 | 在结果上继续下指令，多轮迭代，一键回退上一版 |
+| 手动改结果 | 预览区点铅笔即可直接编辑 AI 输出，改完可应用、可保存、也可继续交给 AI |
 | 改动对比 | 逐行 LCS + 行内字符级 diff，新增绿底、删除红底删除线，未改动行自动折叠 |
 | 多服务商 | 每个接口地址独立保存 API Key，切换服务商不会串用 |
 | 拉取模型 | 点「拉取」请求 `{地址}/models` 取回可用模型，可搜索后点选 |
@@ -25,7 +26,7 @@
 
 ## 快速上手
 
-打开应用 → 右上角 ⚙︎ → 填三项即可用：
+打开应用 → 右上角 ⋮ → 接口与模型设置 → 填三项即可用：
 
 | 服务 | Base URL | 模型示例 |
 | --- | --- | --- |
@@ -89,12 +90,12 @@ app/src/main/java/com/aieditor/text/
 └── ui/                      主界面、AI 面板、配置、备份、历史、关于
 ```
 
-Kotlin 1.9.24 / Jetpack Compose（BOM 2024.09）/ Material 3 / OkHttp 4.12 / PdfBox-Android / AGP 8.5.2 / minSdk 24 / targetSdk 34。50 个单元测试覆盖端点推导、SSE 解析、密钥分槽、备份合并、切分、diff。依赖只有 Compose、OkHttp、PdfBox 与协程，**不含任何统计、广告或崩溃上报 SDK**。
+Kotlin 1.9.24 / Jetpack Compose（BOM 2024.09）/ Material 3 / OkHttp 4.12 / PdfBox-Android / AGP 8.5.2 / minSdk 24 / targetSdk 34。56 个单元测试覆盖端点推导、SSE 解析、密钥分槽、备份合并、切分、diff。依赖只有 Compose、OkHttp、PdfBox 与协程，**不含任何统计、广告或崩溃上报 SDK**。
 
 ## 发版
 
 ```bash
-./scripts/release.sh 1.6.2 "新增批量导出|修复分段重叠"
+./scripts/release.sh 1.8.1 "新增批量导出|修复分段重叠"
 ```
 
 脚本依次完成：`versionCode` +1、`versionName` 与 README 版本号同步、更新记录写入 `Changelog.kt`（只保留最近 5 条）、跑测试、构建 release 包、校验签名指纹、提交、打 tag、推送。检测到 `.github/workflows/release.yml` 时，构建与发布交给 GitHub Actions，本地不再重复上传。
@@ -102,6 +103,12 @@ Kotlin 1.9.24 / Jetpack Compose（BOM 2024.09）/ Material 3 / OkHttp 4.12 / Pdf
 CI 的 `.github/workflows/release.yml` 在推送 `v*` tag 时跑测试 → 构建 → `zipalign -c -P 16` 校验 16KB 对齐 → 生成 `SHA256SUMS.txt` → 发布到 Releases（手动触发走草稿）。要产出与本地同一签名的包，在仓库 Secrets 里加 `ANDROID_KEYSTORE_BASE64`（keystore 的 base64）、`ANDROID_STORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`；不配也能跑，只是产物带 `-debug-signed` 后缀。
 
 ## 更新记录
+
+**1.8.0**（2026-11-13）
+- 输出预览可直接手动编辑：点右上角铅笔进入，改完可应用 / 保存 / 继续让 AI 改
+- 新增「保存」：结果（含手动修改）存成 txt 或分享给其他应用
+- 界面精简，按钮整合：发送兼作停止，范围与分段合并为下拉，配置与关闭移到标题栏
+- 统一全应用按钮与选项的尺寸、圆角、配色
 
 **1.7.0**（2026-11-13）
 - 新增「从零生成」：编辑区为空时自动切到生成模式，写下要求直接产出内容
@@ -120,11 +127,6 @@ CI 的 `.github/workflows/release.yml` 在推送 `v*` tag 时跑测试 → 构�
 - 模型名旁「拉取」从 `/models` 取回可用模型，可搜索点选
 - 测试连接改为先查模型列表，超时缩短到 6 秒，连不上立即失败
 - 网络错误提示改为中文
-
-**1.5.1**（2026-11-13）
-- 修复切换服务商后 API Key 串用：每个接口地址独立保存密钥
-- 修复增量恢复出现「新地址 + 旧密钥」，地址、模型、密钥成组补全
-- 备份包含所有服务商密钥，换机不用逐个重填
 
 更早的版本见 [Releases](https://github.com/linp1314/AI-Text-Editor/releases)。
 
