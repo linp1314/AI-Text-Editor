@@ -1,0 +1,95 @@
+name: Release
+
+# 打 tag（v*）即自动构建 APK 并发布到 Releases；也可在 Actions 页手动触发。
+# 本地执行 ./scripts/release.sh 1.6.1 "说明" 会顺带 push tag，触发这里。
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号（仅手动触发时用，如 1.6.1）"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: 准备 local.properties 与签名
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            mkdir -p app/keystore
+            echo "$KEYSTORE_BASE64" | base64 -d > app/keystore/release.jks
+            {
+              echo "RELEASE_STORE_FILE=app/keystore/release.jks"
+              echo "RELEASE_STORE_PASSWORD=$STORE_PASSWORD"
+              echo "RELEASE_KEY_ALIAS=$KEY_ALIAS"
+              echo "RELEASE_KEY_PASSWORD=$KEY_PASSWORD"
+            } >> local.properties
+            echo "✅ 使用仓库 Secrets 中的正式签名"
+            echo "SIGNED=yes" >> "$GITHUB_ENV"
+          else
+            echo "::warning::未配置 ANDROID_KEYSTORE_BASE64，本次将使用 debug 签名，产物不能覆盖安装正式包"
+            echo "SIGNED=no" >> "$GITHUB_ENV"
+          fi
+
+      - name: 单元测试
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
+
+      - name: 构建 Release APK
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
+
+      - name: 整理产物（文件名保持纯 ASCII，避免 Release 附件名被清洗）
+        run: |
+          VERSION="${GITHUB_REF_NAME:-manual-${GITHUB_RUN_NUMBER}}"
+          VERSION="${VERSION#v}"
+          if [ "$SIGNED" = "yes" ]; then
+            OUT="AI-Text-Editor-v${VERSION}.apk"
+          else
+            OUT="AI-Text-Editor-v${VERSION}-debug-signed.apk"
+          fi
+          cp app/build/outputs/apk/release/app-release.apk "$OUT"
+          echo "APK_NAME=$OUT" >> "$GITHUB_ENV"
+          ls -lh "$OUT"
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          "$BT/zipalign" -c -P 16 4 "$OUT" && echo "✅ 16KB 对齐校验通过"
+
+      - name: 计算校验值
+        run: sha256sum "$APK_NAME" | tee SHA256SUMS.txt
+
+      - name: 发布到 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.APK_NAME }}
+            SHA256SUMS.txt
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+
+      - name: 保留构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-${{ github.ref_name }}
+          path: ${{ env.APK_NAME }}
