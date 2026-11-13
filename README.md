@@ -204,3 +204,58 @@ RELEASE_KEY_PASSWORD=你的口令
 **预览是空白但状态显示完成** 部分中转服务会忽略 `stream: true` 直接返回 JSON，客户端已做兜底解析；若仍失败，在配置里关闭「流式输出」再试。
 
 **想换一种改法** 直接在面板里再发一条指令（例如「再简洁一半」），会带上最近几轮上下文继续修改；点「应用」后原位置被替换，可用底部提示条的「撤销」回退。
+
+---
+
+## 6. 发版与自动推送
+
+### 6.1 配置一次凭证
+
+推送需要写权限。**HTTPS + PAT** 最省事（本机 SSH 22 端口常被运营商拦截）：
+
+```bash
+# 1. 生成 PAT：GitHub → Settings → Developer settings → Personal access tokens →
+#    Tokens (classic) → Generate new token，勾选 repo
+# 2. 记住凭证，之后 push 不再询问
+git config --global credential.helper store
+git push            # 用户名填 GitHub 用户名，密码粘贴 PAT
+```
+
+也可以直接用凭据嵌入远程地址（PAT 会被写进 `.git/config`，注意别提交）：
+
+```bash
+git remote set-url origin https://oauth2:<PAT>@github.com/linp1314/AI-Text-Editor.git
+```
+
+### 6.2 一条命令发版
+
+```bash
+./scripts/release.sh 1.5.3 "新增批量导出|修复分段重叠"
+```
+
+脚本会依次完成：
+
+1. `versionCode` 自动 +1、`versionName` 改为 1.5.3
+2. 把更新说明写进「关于」页的 `Changelog.kt`（日期取当天）
+3. 跑单元测试 → 构建 release 包 → 校验签名指纹
+4. 导出 `../AI文本编辑-v1.5.3.apk`
+5. `git commit` → 打 tag `v1.5.3` → `git push origin main --tags`
+
+推送失败时提交和 tag 会留在本地，配好凭证后补一条 `git push origin main --tags` 即可。
+
+> 脚本拒绝在脏工作区或非 `main` 分支上发版，避免把半成品带进 tag。
+
+### 6.3 打 tag 自动构建并发布 APK
+
+`.github/workflows/release.yml` 会在推送 `v*` tag 时自动跑测试、构建 APK 并挂到 GitHub Releases。要在 CI 里产出**与本地同一签名**的包，需在仓库 Settings → Secrets and variables → Actions 添加：
+
+| Secret | 内容 |
+| --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | `base64 -w0 app/keystore/release.jks` 的输出 |
+| `ANDROID_STORE_PASSWORD` | keystore 口令 |
+| `ANDROID_KEY_ALIAS` | 密钥别名 |
+| `ANDROID_KEY_PASSWORD` | 密钥口令 |
+
+不配置这些 Secret 也能跑通，只是产物为 debug 签名，不能覆盖安装已发布的版本。
+
+工作流也支持手动触发（Actions → Release → Run workflow），但版本号仍以仓库里的 `versionName` 为准。
