@@ -2,7 +2,7 @@
 
 轻量的 Android 文本编辑器：接入**任意 OpenAI 兼容接口**，用一句自然语言指令润色、改写、翻译文本；可从手机导入 docx / pdf / txt 等文档，结果直接写回编辑区。
 
-当前版本 **1.10.0** ｜ [下载 APK](https://github.com/linp1314/AI-Text-Editor/releases/latest) ｜ 需要 Android 7.0+（arm64）
+当前版本 **1.10.1** ｜ [下载 APK](https://github.com/linp1314/AI-Text-Editor/releases/latest) ｜ 需要 Android 7.0+（arm64）
 
 ## 功能
 
@@ -20,6 +20,7 @@
 | 流式输出 | SSE 增量渲染，随时停止，已生成部分保留 |
 | 二次编辑 | 在结果上继续下指令，多轮迭代，一键回退上一版 |
 | 手动改结果 | 预览区点铅笔即可直接编辑 AI 输出，改完可应用、可保存、也可继续交给 AI |
+| 保存结果 | 默认文件名沿用原文件名加「AI」、扩展名不变（`笔记.txt` → `笔记AI.txt`），保存时可改 |
 | 改动对比 | 逐行 LCS + 行内字符级 diff，新增绿底、删除红底删除线，未改动行自动折叠 |
 | 多服务商 | 每个接口地址独立保存 API Key，切换服务商不会串用 |
 | 拉取模型 | 点「拉取」请求 `{地址}/models` 取回可用模型，可搜索后点选 |
@@ -96,7 +97,7 @@ app/src/main/java/com/aieditor/text/
 └── ui/                      主界面、AI 面板、配置、备份、历史、关于
 ```
 
-Kotlin 1.9.24 / Jetpack Compose（BOM 2024.09）/ Material 3 / OkHttp 4.12 / PdfBox-Android / AGP 8.5.2 / minSdk 24 / targetSdk 34。70 个单元测试覆盖端点推导、SSE 解析、密钥分槽、备份合并、切分、diff、提示词预设。依赖只有 Compose、OkHttp、PdfBox 与协程，**不含任何统计、广告或崩溃上报 SDK**。
+Kotlin 1.9.24 / Jetpack Compose（BOM 2024.09）/ Material 3 / OkHttp 4.12 / PdfBox-Android / AGP 8.5.2 / minSdk 24 / targetSdk 34。83 个单元测试覆盖端点推导、SSE 解析、密钥分槽、备份合并、切分、diff、提示词预设与导出命名。依赖只有 Compose、OkHttp、PdfBox 与协程，**不含任何统计、广告或崩溃上报 SDK**。
 
 ## 发版
 
@@ -109,6 +110,11 @@ Kotlin 1.9.24 / Jetpack Compose（BOM 2024.09）/ Material 3 / OkHttp 4.12 / Pdf
 CI 的 `.github/workflows/release.yml` 在推送 `v*` tag 时跑测试 → 构建 → `zipalign -c -P 16` 校验 16KB 对齐 → 生成 `SHA256SUMS.txt` → 发布到 Releases（手动触发走草稿）。要产出与本地同一签名的包，在仓库 Secrets 里加 `ANDROID_KEYSTORE_BASE64`（keystore 的 base64）、`ANDROID_STORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`；不配也能跑，只是产物带 `-debug-signed` 后缀。
 
 ## 更新记录
+
+**1.10.1**（2026-11-16）
+- 保存 AI 结果时默认文件名改为「原文件名 + AI」，扩展名不变：`笔记.txt` → `笔记AI.txt`、`README.md` → `READMEAI.md`
+- 扩展名跟随来源文件：md / csv / json / html 等文本格式原样保留，docx / pdf 这类存不成文本的退回 `.txt`
+- 重命名过的文档用新名字配原扩展名；非法字符替换成下划线，已是 `xxxAI` 的不会重复叠加
 
 **1.10.0**（2026-11-13）
 - 支持同时打开多篇文档：左上角图标唤出列表，点一下切换，正文、撤销记录、光标位置各自独立
@@ -133,9 +139,6 @@ CI 的 `.github/workflows/release.yml` 在推送 `v*` tag 时跑测试 → 构�
 - 生成模式快捷短语换成创作类，处理范围与长文分段自动隐藏
 - 结果点「写入」落到编辑区；生成期间自己写的会追加而不是覆盖
 
-**1.6.1**（2026-11-13）
-- 关闭 Android 系统云备份，API Key、草稿与结果历史不再随手机备份同步到云端
-- WebDAV 备份页新增明文提示；更新记录精简为最近 5 个版本
 
 更早的版本见 [Releases](https://github.com/linp1314/AI-Text-Editor/releases)。
 

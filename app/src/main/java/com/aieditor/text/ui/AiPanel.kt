@@ -140,12 +140,23 @@ fun AiPanelDialog(
         if (!editing) editValue = TextFieldValue(displayText, TextRange(displayText.length))
     }
 
-    val saveLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("text/plain")
-    ) { uri ->
+    // 默认文件名跟随当前文档：原文件名 +「AI」，扩展名不变
+    val activeDoc = remember(state.docId) {
+        val id = state.docId ?: vm.activeDocId.value
+        vm.docs.value.firstOrNull { it.id == id }
+    }
+    val saveTarget = remember(activeDoc?.id, activeDoc?.title, activeDoc?.sourceName) {
+        vm.exportTarget()
+    }
+    val saveContract = remember(saveTarget.mime) {
+        ActivityResultContracts.CreateDocument(saveTarget.mime)
+    }
+    val saveLauncher = rememberLauncherForActivityResult(saveContract) { uri ->
         if (uri != null) {
             val ok = vm.writeToUri(context, uri, displayText)
-            coroutine.launch { snackbarHost.showSnackbar(if (ok) "已保存到文件" else "保存失败") }
+            coroutine.launch {
+                snackbarHost.showSnackbar(if (ok) "已保存 ${saveTarget.name}" else "保存失败")
+            }
         }
     }
 
@@ -605,7 +616,7 @@ fun AiPanelDialog(
                     Text("保存结果", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "保存为 txt 文件，或直接分享给其他应用。内容包含你手动修改的部分。",
+                        "默认文件名沿用原文件名并加上「AI」，可在保存时改。也可以直接分享给其他应用，内容包含你手动修改的部分。",
                         fontSize = 12.sp,
                         lineHeight = 18.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -624,11 +635,11 @@ fun AiPanelDialog(
                             context.startActivity(Intent.createChooser(send, "分享 AI 结果"))
                         }
                         PrimaryButton(
-                            text = "保存为 TXT",
+                            text = "保存为 ${saveTarget.name.substringAfterLast('.').uppercase()}",
                             modifier = Modifier.weight(1f),
                         ) {
                             showSave = false
-                            saveLauncher.launch(vm.exportFileName())
+                            saveLauncher.launch(saveTarget.name)
                         }
                     }
                 }

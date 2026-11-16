@@ -15,6 +15,8 @@ data class Doc(
     val subtitle: String = "",
     /** 来源文件 URI；为空表示这篇内容还没有对应的本地文件。 */
     val uri: String? = null,
+    /** 导入时的原始文件名（含扩展名），保存 AI 结果时用它拼默认名。 */
+    val sourceName: String? = null,
     val text: String = "",
 )
 
@@ -37,6 +39,7 @@ object DocCodec {
                 put("title", doc.title)
                 put("subtitle", doc.subtitle)
                 if (!doc.uri.isNullOrBlank()) put("uri", doc.uri)
+                if (!doc.sourceName.isNullOrBlank()) put("source", doc.sourceName)
                 put("text", doc.text)
             })
         }
@@ -65,6 +68,7 @@ object DocCodec {
                     title = title,
                     subtitle = item.optString("subtitle", ""),
                     uri = item.optString("uri", "").takeIf { it.isNotBlank() },
+                    sourceName = item.optString("source", "").takeIf { it.isNotBlank() },
                     text = text,
                 )
             )

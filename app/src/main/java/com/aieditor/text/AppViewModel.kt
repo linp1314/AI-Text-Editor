@@ -17,6 +17,8 @@ import com.aieditor.text.data.Doc
 import com.aieditor.text.data.DocCodec
 import com.aieditor.text.data.DocumentImporter
 import com.aieditor.text.data.DocumentStore
+import com.aieditor.text.data.ExportName
+import com.aieditor.text.data.ExportTarget
 import com.aieditor.text.data.HistoryEntry
 import com.aieditor.text.data.MergeResult
 import com.aieditor.text.data.PromptBuilder
@@ -337,6 +339,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 title = document.name,
                 subtitle = path.ifBlank { "导入的文件" },
                 uri = uri.toString(),
+                sourceName = document.name,
                 text = document.text,
             )
             _docs.update { listOf(doc) + it }
@@ -1041,9 +1044,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         return true
     }
 
-    fun exportFileName(): String {
+    /** 保存 AI 结果时的默认文件名：原文件名 +「AI」，扩展名保持不变。 */
+    fun exportTarget(): ExportTarget {
+        val doc = _docs.value.firstOrNull { it.id == _activeDocId.value }
         val stamp = SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())
-        return "AI文本_$stamp.txt"
+        return ExportName.suggest(doc?.sourceName, doc?.title, stamp)
     }
 
     fun writeToUri(context: Context, uri: Uri, text: String): Boolean = try {

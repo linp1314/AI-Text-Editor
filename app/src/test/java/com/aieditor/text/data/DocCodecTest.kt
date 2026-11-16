@@ -14,6 +14,7 @@ class DocCodecTest {
             title = "钉钉直连.yaml",
             subtitle = "/storage/emulated/0/Download/钉钉直连.yaml",
             uri = "content://com.android.providers.downloads.documents/document/1",
+            sourceName = "钉钉直连.yaml",
             text = "name: 钉钉\nport: 8080\n",
         ),
         Doc(id = 12L, title = "未命名 2", subtitle = "未命名文档", text = "第二篇的正文"),
@@ -27,9 +28,11 @@ class DocCodecTest {
         assertEquals("钉钉直连.yaml", restored[0].title)
         assertEquals("/storage/emulated/0/Download/钉钉直连.yaml", restored[0].subtitle)
         assertEquals(sample[0].uri, restored[0].uri)
+        assertEquals("钉钉直连.yaml", restored[0].sourceName)
         assertEquals("name: 钉钉\nport: 8080\n", restored[0].text)
         assertEquals(12L, restored[1].id)
         assertNull(restored[1].uri)
+        assertNull(restored[1].sourceName)
     }
 
     @Test
