@@ -21,7 +21,6 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
@@ -46,6 +45,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -55,7 +55,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
@@ -159,6 +161,9 @@ fun AppRoot(sharedText: String? = null, vm: AppViewModel = viewModel()) {
 
     val text = editor.text
     val selectedCount = kotlin.math.abs(editor.selection.end - editor.selection.start)
+    // 底栏实际高度：提示条要浮在它上面，不能压住「导入 / AI 编辑」
+    var bottomBarPx by remember { mutableIntStateOf(0) }
+    val density = LocalDensity.current
 
     // 提示条放在抽屉外层：在文档列表里关闭文档时，撤销提示不会被抽屉挡住
     Box(Modifier.fillMaxSize()) {
@@ -251,7 +256,11 @@ fun AppRoot(sharedText: String? = null, vm: AppViewModel = viewModel()) {
                     )
                 },
                 bottomBar = {
-                    Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 3.dp) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surface,
+                        tonalElevation = 3.dp,
+                        modifier = Modifier.onSizeChanged { bottomBarPx = it.height },
+                    ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -338,7 +347,7 @@ fun AppRoot(sharedText: String? = null, vm: AppViewModel = viewModel()) {
         hostState = snackbarHost,
         modifier = Modifier
             .align(Alignment.BottomCenter)
-            .navigationBarsPadding()
+            .padding(bottom = with(density) { bottomBarPx.toDp() } + 8.dp)
             .padding(horizontal = 12.dp, vertical = 8.dp),
     )
     }

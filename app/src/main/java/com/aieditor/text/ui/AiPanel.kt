@@ -10,6 +10,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,8 +19,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -70,6 +73,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -162,19 +166,20 @@ fun AiPanelDialog(
 
     Dialog(
         onDismissRequest = onClose,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
+        // 全屏铺满：原来是 94% 高的浮层，底部会把「导入 / AI 编辑」露出半截，
+        // 看着像被弹窗压住、点了又没反应
         Surface(
-            modifier = Modifier
-                .fillMaxWidth(0.95f)
-                .fillMaxHeight(0.94f),
-            shape = RoundedCornerShape(18.dp),
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 2.dp,
-            shadowElevation = 16.dp,
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background,
         ) {
             Box(Modifier.fillMaxSize()) {
-                Column(Modifier.fillMaxSize()) {
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .statusBarsPadding(),
+                ) {
 
                     // ---------------- 标题：只留标题 + 三个次要入口
                     Row(
@@ -529,6 +534,7 @@ fun AiPanelDialog(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .navigationBarsPadding()
                             .padding(horizontal = 16.dp, vertical = 10.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
@@ -774,148 +780,280 @@ private fun AlertDialogFrame(onDismiss: () -> Unit, content: @Composable () -> U
 
 // ------------------------------------------------------------------ 改动对比
 
-private val DiffAddBg = Color(0xFF1B7F4B).copy(alpha = 0.16f)
-private val DiffAddFg = Color(0xFF136B3E)
-private val DiffDelBg = Color(0xFFB3261E).copy(alpha = 0.12f)
-private val DiffDelFg = Color(0xFF9A1B14)
-private val DiffModFg = Color(0xFF8A6D3B)
+/**
+ * 改动的呈现方式：
+ * 每一行原文与它对应的改后文字上下成对出现，行号在左侧对齐，整行铺淡红 / 淡绿底色。
+ * 之前把「删掉的字 + 新增的字」拼在同一行里，读的时候对不上原文，改动也不明显。
+ */
+private val DiffDelRow = Color(0xFFFDECEA)
+private val DiffAddRow = Color(0xFFE9F6EE)
+private val DiffDelFg = Color(0xFF9E2A1E)
+private val DiffAddFg = Color(0xFF12663B)
+private val DiffDelMark = Color(0xFFF7C9C2)
+private val DiffAddMark = Color(0xFFB4DFC4)
+private val DiffDelBar = Color(0xFFD0453A)
+private val DiffAddBar = Color(0xFF2F9B62)
 
-private sealed interface DiffRow {
-    data class One(val line: TextDiff.Line) : DiffRow
-    data class Gap(val start: Int, val count: Int) : DiffRow
+/** 一次改动最多展开多少行未改动内容，避免整篇原文一次性渲染。 */
+private const val MAX_EXPANDED_EQUAL = 300
+
+private enum class DiffRole { EQUAL, DELETE, INSERT, MOD_OLD, MOD_NEW }
+
+private data class DiffLine(
+    val role: DiffRole,
+    val number: Int,
+    val text: AnnotatedString,
+)
+
+private sealed interface DiffItem {
+    data class Single(val line: DiffLine) : DiffItem
+    /** 同一处改动的若干行：整块圆角铺底，左侧一条彩条连起来。 */
+    data class Block(val lines: List<DiffLine>) : DiffItem
+    /** 连续未改动的行，默认折叠成一行提示。 */
+    data class Gap(val lines: List<DiffLine>) : DiffItem
 }
 
 @Composable
 private fun DiffPane(diff: TextDiff.Result) {
-    Column(Modifier.fillMaxSize()) {
-        DiffLines(diff)
+    val items = remember(diff) { buildDiffItems(diff) }
+    val expanded = remember(diff) { mutableStateMapOf<Int, Boolean>() }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = 12.dp),
+    ) {
+        item(key = "legend") { DiffLegend(diff) }
+        items.forEachIndexed { index, item ->
+            when (item) {
+                is DiffItem.Single -> item(key = "row-$index") { DiffLineRow(item.line) }
+                is DiffItem.Block -> item(key = "block-$index") { DiffBlock(item.lines) }
+                is DiffItem.Gap -> item(key = "gap-$index") {
+                    if (expanded[index] == true) {
+                        DiffGapExpanded(item.lines)
+                    } else {
+                        GapRow(item.lines.size) { expanded[index] = true }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 顶部图例：说明红绿各代表什么，顺手给出改动行数。 */
+@Composable
+private fun DiffLegend(diff: TextDiff.Result) {
+    val outline = MaterialTheme.colorScheme.outline
+    Text(
+        buildAnnotatedString {
+            withStyle(
+                SpanStyle(background = DiffDelRow, color = DiffDelFg, fontWeight = FontWeight.SemiBold),
+            ) { append(" − 原文 ") }
+            withStyle(SpanStyle(color = outline)) { append("  ") }
+            withStyle(
+                SpanStyle(background = DiffAddRow, color = DiffAddFg, fontWeight = FontWeight.SemiBold),
+            ) { append(" + 改后 ") }
+            withStyle(SpanStyle(color = outline)) { append("   共 ${diff.changedLines} 行改动") }
+        },
+        fontSize = 11.sp,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.padding(bottom = 8.dp),
+    )
+}
+
+@Composable
+private fun DiffBlock(lines: List<DiffLine>) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp)
+            .clip(RoundedCornerShape(6.dp)),
+    ) {
+        lines.forEach { DiffLineRow(it) }
     }
 }
 
 @Composable
-private fun DiffLines(diff: TextDiff.Result) {
-    val rows = remember(diff) {
-        val out = ArrayList<DiffRow>()
-        var i = 0
-        while (i < diff.lines.size) {
-            if (diff.lines[i].kind == TextDiff.Kind.EQUAL) {
-                var j = i
-                while (j < diff.lines.size && diff.lines[j].kind == TextDiff.Kind.EQUAL) j++
-                if (j - i > 4) {
-                    out.add(DiffRow.Gap(i, j - i))
-                } else {
-                    for (k in i until j) out.add(DiffRow.One(diff.lines[k]))
-                }
-                i = j
-            } else {
-                out.add(DiffRow.One(diff.lines[i]))
-                i++
-            }
-        }
-        out
+private fun DiffLineRow(line: DiffLine) {
+    val scheme = MaterialTheme.colorScheme
+    val bg = when (line.role) {
+        DiffRole.DELETE, DiffRole.MOD_OLD -> DiffDelRow
+        DiffRole.INSERT, DiffRole.MOD_NEW -> DiffAddRow
+        DiffRole.EQUAL -> Color.Transparent
     }
-    val expanded = remember(diff) { mutableStateMapOf<Int, Boolean>() }
+    val accent = when (line.role) {
+        DiffRole.DELETE, DiffRole.MOD_OLD -> DiffDelBar
+        DiffRole.INSERT, DiffRole.MOD_NEW -> DiffAddBar
+        DiffRole.EQUAL -> Color.Transparent
+    }
+    val sign = when (line.role) {
+        DiffRole.DELETE, DiffRole.MOD_OLD -> "−"
+        DiffRole.INSERT, DiffRole.MOD_NEW -> "+"
+        DiffRole.EQUAL -> ""
+    }
+    val signColor = when (line.role) {
+        DiffRole.DELETE, DiffRole.MOD_OLD -> DiffDelFg
+        DiffRole.INSERT, DiffRole.MOD_NEW -> DiffAddFg
+        DiffRole.EQUAL -> scheme.outline
+    }
 
-    LazyColumn(Modifier.fillMaxSize()) {
-        rows.forEach { row ->
-            when (row) {
-                is DiffRow.Gap -> {
-                    if (expanded[row.start] == true) {
-                        items(row.count) { offset ->
-                            DiffLineRow(diff.lines[row.start + offset])
-                        }
-                    } else {
-                        item(key = "gap-${row.start}") {
-                            GapRow(row.count) { expanded[row.start] = true }
-                        }
-                    }
-                }
-                is DiffRow.One -> item { DiffLineRow(row.line) }
-            }
-        }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min)
+            .background(bg),
+    ) {
+        Box(
+            Modifier
+                .width(2.dp)
+                .fillMaxHeight()
+                .background(accent),
+        )
+        Text(
+            text = line.number.toString(),
+            modifier = Modifier
+                .width(30.dp)
+                .padding(end = 6.dp, top = 3.dp),
+            fontSize = 10.sp,
+            textAlign = TextAlign.End,
+            color = if (line.role == DiffRole.EQUAL) scheme.outline else signColor.copy(alpha = 0.65f),
+        )
+        Text(
+            text = sign,
+            modifier = Modifier
+                .width(11.dp)
+                .padding(top = 2.dp),
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = signColor,
+        )
+        Text(
+            text = line.text,
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 8.dp, top = 2.dp, bottom = 2.dp),
+            fontSize = 13.sp,
+            lineHeight = 20.sp,
+            color = scheme.onSurface,
+        )
     }
 }
 
 @Composable
 private fun GapRow(count: Int, onExpand: () -> Unit) {
-    Text(
-        text = "⋯ $count 行未改动（点按展开）",
-        fontSize = 11.sp,
-        color = MaterialTheme.colorScheme.outline,
+    val outline = MaterialTheme.colorScheme.outline
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(4.dp))
             .clickable(onClick = onExpand)
-            .padding(vertical = 3.dp),
-    )
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "⋯",
+            modifier = Modifier
+                .width(36.dp)
+                .padding(end = 6.dp),
+            fontSize = 11.sp,
+            textAlign = TextAlign.End,
+            color = outline,
+        )
+        Text("$count 行未改动 · 点按展开", fontSize = 11.sp, color = outline)
+    }
 }
 
 @Composable
-private fun DiffLineRow(line: TextDiff.Line) {
-    val sign = when (line.kind) {
-        TextDiff.Kind.INSERT -> "+"
-        TextDiff.Kind.DELETE -> "−"
-        TextDiff.Kind.MODIFY -> "~"
-        TextDiff.Kind.EQUAL -> " "
-    }
-    val signColor = when (line.kind) {
-        TextDiff.Kind.INSERT -> DiffAddFg
-        TextDiff.Kind.DELETE -> DiffDelFg
-        TextDiff.Kind.MODIFY -> DiffModFg
-        TextDiff.Kind.EQUAL -> MaterialTheme.colorScheme.outline
-    }
-    val body = remember(line) { buildLineText(line) }
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 1.dp),
-    ) {
-        Text(
-            text = sign,
-            modifier = Modifier.width(13.dp),
-            fontSize = 12.sp,
-            color = signColor,
-        )
-        Text(
-            text = body,
-            modifier = Modifier.weight(1f),
-            fontSize = 13.sp,
-            lineHeight = 20.sp,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
+private fun DiffGapExpanded(lines: List<DiffLine>) {
+    Column(Modifier.fillMaxWidth()) {
+        lines.take(MAX_EXPANDED_EQUAL).forEach { DiffLineRow(it) }
+        if (lines.size > MAX_EXPANDED_EQUAL) {
+            Text(
+                text = "⋯ 还有 ${lines.size - MAX_EXPANDED_EQUAL} 行未展开",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.padding(start = 36.dp, top = 4.dp, bottom = 4.dp),
+            )
+        }
     }
 }
 
-private fun buildLineText(line: TextDiff.Line): AnnotatedString = buildAnnotatedString {
-    when (line.kind) {
-        TextDiff.Kind.EQUAL -> append(line.text.ifEmpty { " " })
-        TextDiff.Kind.INSERT -> withStyle(
-            SpanStyle(background = DiffAddBg, color = DiffAddFg),
-        ) { append(line.newText.ifEmpty { " " }) }
-        TextDiff.Kind.DELETE -> withStyle(
-            SpanStyle(
-                background = DiffDelBg,
-                color = DiffDelFg,
-                textDecoration = TextDecoration.LineThrough,
-            ),
-        ) { append(line.oldText.ifEmpty { " " }) }
-        TextDiff.Kind.MODIFY -> {
-            TextDiff.inlineDiff(line.oldText, line.newText).forEach { part ->
-                when (part.kind) {
-                    TextDiff.InlineKind.EQUAL -> append(part.text)
-                    TextDiff.InlineKind.INSERT -> withStyle(
-                        SpanStyle(background = DiffAddBg, color = DiffAddFg),
-                    ) { append(part.text) }
-                    TextDiff.InlineKind.DELETE -> withStyle(
-                        SpanStyle(
-                            background = DiffDelBg,
-                            color = DiffDelFg,
-                            textDecoration = TextDecoration.LineThrough,
-                        ),
-                    ) { append(part.text) }
-                }
+/** 逐行对齐：改动行紧跟在原文行下面，行号左右分开数，一眼能看出哪一行换成了什么。 */
+private fun buildDiffItems(diff: TextDiff.Result): List<DiffItem> {
+    val items = ArrayList<DiffItem>()
+    var oldNo = 1
+    var newNo = 1
+    var equal = ArrayList<DiffLine>()
+    var block = ArrayList<DiffLine>()
+
+    fun flushEqual() {
+        if (equal.isEmpty()) return
+        if (equal.size > 3) {
+            items.add(DiffItem.Gap(equal.toList()))
+        } else {
+            equal.forEach { items.add(DiffItem.Single(it)) }
+        }
+        equal = ArrayList()
+    }
+
+    fun flushBlock() {
+        if (block.isEmpty()) return
+        // 整篇重写时一块可能有上千行，切成小段交给列表，避免一屏渲染太多
+        block.chunked(40).forEach { items.add(DiffItem.Block(it)) }
+        block = ArrayList()
+    }
+
+    diff.lines.forEach { line ->
+        when (line.kind) {
+            TextDiff.Kind.EQUAL -> {
+                flushBlock()
+                equal.add(DiffLine(DiffRole.EQUAL, newNo, AnnotatedString(line.text.ifEmpty { " " })))
+                oldNo++
+                newNo++
             }
+            TextDiff.Kind.DELETE -> {
+                flushEqual()
+                block.add(DiffLine(DiffRole.DELETE, oldNo++, AnnotatedString(line.oldText.ifEmpty { " " })))
+            }
+            TextDiff.Kind.INSERT -> {
+                flushEqual()
+                block.add(DiffLine(DiffRole.INSERT, newNo++, AnnotatedString(line.newText.ifEmpty { " " })))
+            }
+            TextDiff.Kind.MODIFY -> {
+                flushEqual()
+                val parts = TextDiff.inlineDiff(line.oldText, line.newText)
+                block.add(DiffLine(DiffRole.MOD_OLD, oldNo++, oldSide(parts)))
+                block.add(DiffLine(DiffRole.MOD_NEW, newNo++, newSide(parts)))
+            }
+        }
+    }
+    flushEqual()
+    flushBlock()
+    return items
+}
+
+/** 原文一侧：保留原句，被替换掉的字加重标出来，新增的字不出现。 */
+private fun oldSide(parts: List<TextDiff.Inline>): AnnotatedString = buildAnnotatedString {
+    parts.forEach { part ->
+        when (part.kind) {
+            TextDiff.InlineKind.EQUAL -> append(part.text)
+            TextDiff.InlineKind.DELETE -> withStyle(
+                SpanStyle(background = DiffDelMark, color = DiffDelFg, textDecoration = TextDecoration.LineThrough),
+            ) { append(part.text) }
+            TextDiff.InlineKind.INSERT -> Unit
+        }
+    }
+}
+
+/** 改后一侧：只显示最终写下的内容，新增的字加重标出来。 */
+private fun newSide(parts: List<TextDiff.Inline>): AnnotatedString = buildAnnotatedString {
+    parts.forEach { part ->
+        when (part.kind) {
+            TextDiff.InlineKind.EQUAL -> append(part.text)
+            TextDiff.InlineKind.INSERT -> withStyle(
+                SpanStyle(background = DiffAddMark, color = DiffAddFg),
+            ) { append(part.text) }
+            TextDiff.InlineKind.DELETE -> Unit
         }
     }
 }
